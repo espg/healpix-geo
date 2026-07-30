@@ -1,13 +1,30 @@
 use geodesy::ellps::Ellipsoid as GeodesyEllipsoid;
+use geodesy::prelude::EllipsoidBase;
 use healpix_geo_core::ellipsoid::{
-    Ellipsoid as RustEllipsoid, ReferenceEllipsoid, ReferenceSphere,
+    Ellipsoid as RustEllipsoid, ReferenceBody, ReferenceEllipsoid, ReferenceSphere,
 };
 use serde::Deserialize;
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
+/// The plain-object shapes accepted wherever an ellipsoid is expected.
+///
+/// Mirrors [`EllipsoidLike`], which is an input (deserialization) type only
+/// and is therefore not exported as a class.
+#[wasm_bindgen(typescript_custom_section)]
+const ELLIPSOID_INPUT: &'static str = r#"
+export type EllipsoidInput =
+    | { radius: number }
+    | { semi_major_axis: number; inverse_flattening: number }
+    | { semi_major_axis: number; semi_minor_axis: number };
+"#;
+
+/// Plain-object shapes accepted as ellipsoid definitions.
+///
+/// This is an input (deserialization) type only; the parsed, reusable state
+/// lives in [`Ellipsoid`]. The TypeScript view of it is `EllipsoidInput`
+/// (see the custom section above).
 #[derive(Deserialize, Debug, PartialEq)]
-#[wasm_bindgen]
 pub enum EllipsoidLike {
     #[serde(untagged)]
     EllipsoidInverseFlattening(EllipsoidInverseFlattening),
@@ -18,14 +35,12 @@ pub enum EllipsoidLike {
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-#[wasm_bindgen]
 pub struct EllipsoidInverseFlattening {
     pub semi_major_axis: f64,
     pub inverse_flattening: f64,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-#[wasm_bindgen]
 pub struct EllipsoidSemiMinorAxis {
     pub semi_major_axis: f64,
     pub semi_minor_axis: f64,
@@ -44,7 +59,6 @@ impl From<EllipsoidSemiMinorAxis> for EllipsoidInverseFlattening {
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
-#[wasm_bindgen]
 pub struct Sphere {
     pub radius: f64,
 }
@@ -53,16 +67,6 @@ impl Default for Sphere {
     fn default() -> Sphere {
         Sphere { radius: 6370997.0 }
     }
-}
-
-#[wasm_bindgen(js_name = parseEllipsoid)]
-pub fn parse_ellipsoid(obj: JsValue) -> Result<EllipsoidLike, JsValue> {
-    let ellipsoid_like = if obj.is_null() {
-        EllipsoidLike::Sphere(Sphere::default())
-    } else {
-        from_value(obj)?
-    };
-    Ok(ellipsoid_like)
 }
 
 impl EllipsoidLike {
@@ -91,11 +95,90 @@ impl EllipsoidLike {
     }
 }
 
+/// A parsed, reusable reference body.
+///
+/// Unlike the previous `parseEllipsoid` result (a dynamic union that was
+/// *consumed* — moved into WASM — on first use), this handle is passed to
+/// functions by reference and can be reused for any number of calls. Parsing
+/// and the authalic-latitude Fourier coefficient computation happen once, at
+/// construction.
+#[wasm_bindgen]
+pub struct Ellipsoid {
+    pub(crate) inner: RustEllipsoid,
+}
+
+#[wasm_bindgen]
+impl Ellipsoid {
+    /// Parse a plain object (or `null` for the default sphere) into a
+    /// reusable ellipsoid handle.
+    ///
+    /// Accepted shapes:
+    /// - `null` or `undefined` (including a missing argument) — the default
+    ///   sphere (radius 6370997 m)
+    /// - `{ radius }` — a sphere
+    /// - `{ semi_major_axis, inverse_flattening }`
+    /// - `{ semi_major_axis, semi_minor_axis }`
+    ///
+    /// Note that `undefined` is accepted as well as `null`; upstream's
+    /// `parseEllipsoid` rejected it. Extra keys (e.g. `name`) are ignored.
+    #[wasm_bindgen(js_name = from)]
+    pub fn from_value(
+        #[wasm_bindgen(unchecked_param_type = "EllipsoidInput | null | undefined")] obj: JsValue,
+    ) -> Result<Ellipsoid, JsValue> {
+        let inner = if obj.is_null() || obj.is_undefined() {
+            RustEllipsoid::default()
+        } else {
+            let parsed: EllipsoidLike = from_value(obj)?;
+            parsed.into_ellipsoid()
+        };
+
+        Ok(Ellipsoid { inner })
+    }
+
+    /// Semi-major axis (the radius, for a sphere) in meters
+    #[wasm_bindgen(getter, js_name = semiMajorAxis)]
+    pub fn semi_major_axis(&self) -> f64 {
+        self.inner.ellipsoid().semimajor_axis()
+    }
+
+    /// Flattening (0 for a sphere)
+    #[wasm_bindgen(getter)]
+    pub fn flattening(&self) -> f64 {
+        self.inner.ellipsoid().flattening()
+    }
+
+    /// Whether this reference body is a sphere
+    #[wasm_bindgen(getter, js_name = isSphere)]
+    pub fn is_sphere(&self) -> bool {
+        matches!(self.inner, RustEllipsoid::Sphere(_))
+    }
+}
+
+/// Parse a plain object into a reusable [`Ellipsoid`] handle.
+///
+/// Deprecated alias of `Ellipsoid.from`. The name and the accepted input
+/// shapes are unchanged from 0.2.x, but **the return type is a breaking
+/// change**: it used to be a union value (`Sphere` /
+/// `EllipsoidInverseFlattening` / `EllipsoidSemiMinorAxis`) whose properties
+/// echoed the input (`radius`, `semi_major_axis`, `inverse_flattening`,
+/// `semi_minor_axis`), and it is now an [`Ellipsoid`] handle exposing
+/// `semiMajorAxis`, `flattening` and `isSphere`.
+///
+/// Migration: `parseEllipsoid(x)`-then-pass call sites keep working unchanged
+/// (and become reusable); call sites that *read* properties off the result
+/// have to be updated — `.radius`/`.semi_major_axis` become
+/// `.semiMajorAxis`, and `.inverse_flattening`/`.semi_minor_axis` become
+/// `1 / .flattening` and `.semiMajorAxis * (1 - .flattening)`.
+#[wasm_bindgen(js_name = parseEllipsoid)]
+pub fn parse_ellipsoid(
+    #[wasm_bindgen(unchecked_param_type = "EllipsoidInput | null | undefined")] obj: JsValue,
+) -> Result<Ellipsoid, JsValue> {
+    Ellipsoid::from_value(obj)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geodesy::prelude::EllipsoidBase;
-    use healpix_geo_core::ellipsoid::ReferenceBody;
 
     #[test]
     fn test_ellipsoidlike_to_ellipsoid() {
@@ -180,13 +263,8 @@ pub mod tests_wasm32 {
         let data = json!({"name": "WGS84", "semi_major_axis": a, "inverse_flattening": if_});
         let obj = to_value(&data).map_err(JsValue::from).unwrap();
 
-        let actual: EllipsoidLike = parse_ellipsoid(obj).map_err(JsValue::from).unwrap();
-        match actual {
-            EllipsoidLike::EllipsoidInverseFlattening(ell) => {
-                assert_eq!(ell.semi_major_axis, a);
-                assert_eq!(ell.inverse_flattening, if_);
-            }
-            _ => unreachable!(),
-        }
+        let actual = Ellipsoid::from_value(obj).map_err(JsValue::from).unwrap();
+        assert_eq!(actual.semi_major_axis(), a);
+        assert!(!actual.is_sphere());
     }
 }
