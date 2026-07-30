@@ -31,4 +31,11 @@ describe("generated index.d.ts", () => {
     );
     expect(declarations).to.not.match(/parseEllipsoid\(obj: any\)/);
   });
+
+  test("declares the createGrid options shape", () => {
+    expect(declarations).to.include("export type GridOptions");
+    expect(declarations).to.include('scheme: "nested" | "ring" | "zuniq"');
+    expect(declarations).to.include("createGrid(options: GridOptions)");
+    expect(declarations).to.not.match(/createGrid\(options: any\)/);
+  });
 });
