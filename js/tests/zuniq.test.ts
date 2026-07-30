@@ -1,5 +1,5 @@
 import init, * as healpixGeo from "../pkg/index.js";
-import { Coordinate, TEllipsoid } from "../pkg/index.js";
+import { Coordinate, Ellipsoid } from "../pkg/index.js";
 import { describe, expect, test } from "vitest";
 
 describe("zuniq bitcombine", () => {
@@ -16,19 +16,19 @@ describe("zuniq bitcombine", () => {
 
 describe("zuniq healpixToLonLat", () => {
   test("default-ellipsoid", () => {
-    const actual: Coordinate = healpixGeo.zuniq.healpixToLonLat(164n, null);
+    const actual: Coordinate = healpixGeo.zuniq.healpixToLonLat(164n, Ellipsoid.from(null));
     expect(actual).to.have.a.property("lon", 45.00000100582838);
     expect(actual).to.have.a.property("lat", 9.960692539601928e-7);
   });
 
   test("sphere", () => {
-    const sphere: TEllipsoid = healpixGeo.parseEllipsoid({ radius: 6371000 });
+    const sphere: Ellipsoid = healpixGeo.parseEllipsoid({ radius: 6371000 });
     const actual: Coordinate = healpixGeo.zuniq.healpixToLonLat(164n, sphere);
     expect(actual).to.have.a.property("lon", 45.00000100582838);
     expect(actual).to.have.a.property("lat", 9.960692539601928e-7);
   });
   test("ellipsoid", () => {
-    const ellipsoid: TEllipsoid = healpixGeo.parseEllipsoid({
+    const ellipsoid: Ellipsoid = healpixGeo.parseEllipsoid({
       semi_major_axis: 6378137.0,
       inverse_flattening: 298.257223563,
     });
@@ -44,7 +44,7 @@ describe("zuniq healpixToLonLat", () => {
 describe("zuniq vertex", () => {
   test("default ellipsoid northern", () => {
     const cellId: bigint = 4n;
-    const ellipsoid: TEllipsoid = null;
+    const ellipsoid: Ellipsoid = Ellipsoid.from(null);
     const actual: Coordinate = healpixGeo.zuniq.vertex(
       cellId,
       1.0,
@@ -57,7 +57,7 @@ describe("zuniq vertex", () => {
 
   test("sphere eastern", () => {
     const cellId: bigint = 4n;
-    const ellipsoid: TEllipsoid = healpixGeo.parseEllipsoid({
+    const ellipsoid: Ellipsoid = healpixGeo.parseEllipsoid({
       radius: 6371000,
     });
 
@@ -72,7 +72,7 @@ describe("zuniq vertex", () => {
   });
   test("ellipsoid western", () => {
     const cellId: bigint = 4n;
-    const ellipsoid: TEllipsoid = healpixGeo.parseEllipsoid({
+    const ellipsoid: Ellipsoid = healpixGeo.parseEllipsoid({
       semi_major_axis: 6378137.0,
       inverse_flattening: 298.257223563,
     });
