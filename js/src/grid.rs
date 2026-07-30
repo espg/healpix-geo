@@ -102,6 +102,58 @@ impl Grid {
             Scheme::Zuniq => healpix::nested::to_zuniq(self.depth, hash),
         }
     }
+
+    pub(crate) fn vertices_impl(&self, cell: u64, steps: u32) -> Result<Vec<f64>, String> {
+        if steps < 2 {
+            return Err("`steps` must be at least 2".to_string());
+        }
+
+        let (depth, hash) = self.to_nested(cell);
+        let layer = healpix::nested::get(depth);
+        let center = layer.center_of_projected_cell(hash);
+
+        let count = (steps * steps) as usize;
+        let mut out = Vec::with_capacity(count * 2);
+
+        let scale = 1.0 / f64::from(steps - 1);
+        for i in 0..steps {
+            let u = f64::from(i) * scale;
+            for j in 0..steps {
+                let v = f64::from(j) * scale;
+
+                let (lon, lat) = spherical_vertex(center, depth, (u, v));
+
+                out.push(lon.to_degrees().rem_euclid(360.0));
+                out.push(
+                    self.ellipsoid
+                        .latitude_authalic_to_geographic(lat)
+                        .to_degrees(),
+                );
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub(crate) fn cells_at_impl(&self, lonlats: &[f64]) -> Result<Vec<u64>, String> {
+        if lonlats.len() % 2 != 0 {
+            return Err("`lonlats` must be interleaved [lon, lat] pairs (even length)".to_string());
+        }
+
+        let layer = healpix::nested::get(self.depth);
+
+        Ok(lonlats
+            .chunks_exact(2)
+            .map(|pair| {
+                self.from_nested(scalar::lonlat_to_healpix(
+                    &pair[0],
+                    &pair[1],
+                    layer,
+                    &self.ellipsoid,
+                ))
+            })
+            .collect())
+    }
 }
 
 #[wasm_bindgen]
@@ -182,6 +234,67 @@ impl Grid {
 
         self.from_nested(zoc.ij2h(i, j))
     }
+
+    /// All vertices of a `steps` × `steps` subdivision of the given cell, in
+    /// one call
+    ///
+    /// Equivalent to looping `vertex(cell, i / (steps - 1), j / (steps - 1))`
+    /// for `i` and `j` in `0..steps` (`i` outer, `j` inner), but the loop
+    /// runs inside WASM and the result comes back as a single typed array.
+    ///
+    /// Returns a `Float64Array` of length `steps * steps * 2`, interleaved as
+    /// `[lon0, lat0, lon1, lat1, ...]`.
+    pub fn vertices(&self, cell: u64, steps: u32) -> Result<Vec<f64>, JsValue> {
+        self.vertices_impl(cell, steps)
+            .map_err(|message| JsError::new(&message).into())
+    }
+
+    /// The cells containing the given coordinates, in one call
+    ///
+    /// `lonlats` is interleaved as `[lon0, lat0, lon1, lat1, ...]`; the
+    /// result is a `BigUint64Array` with one cell id per coordinate pair.
+    #[wasm_bindgen(js_name = cellsAt)]
+    pub fn cells_at(&self, lonlats: &[f64]) -> Result<Vec<u64>, JsValue> {
+        self.cells_at_impl(lonlats)
+            .map_err(|message| JsError::new(&message).into())
+    }
+
+    /// Center coordinates of the given cells, in one call
+    ///
+    /// Returns a `Float64Array` of length `cells.length * 2`, interleaved as
+    /// `[lon0, lat0, lon1, lat1, ...]`.
+    pub fn centers(&self, cells: &[u64]) -> Vec<f64> {
+        let mut out = Vec::with_capacity(cells.len() * 2);
+
+        for &cell in cells {
+            let (depth, hash) = self.to_nested(cell);
+            let layer = healpix::nested::get(depth);
+            let (lon, lat) = scalar::healpix_to_lonlat(&hash, layer, &self.ellipsoid);
+
+            out.push(lon);
+            out.push(lat);
+        }
+
+        out
+    }
+
+    /// The full `size` × `size` z-order table, in one call
+    ///
+    /// Entry `row * size + col` holds `bitCombine(col, row)` — the layout
+    /// used when unshuffling a z-order-flattened chunk into row-major order.
+    #[wasm_bindgen(js_name = bitCombineTable)]
+    pub fn bit_combine_table(&self, size: u32) -> Vec<u64> {
+        let zoc = healpix::nested::zordercurve::get_zoc(self.depth);
+
+        let mut out = Vec::with_capacity((size * size) as usize);
+        for row in 0..size {
+            for col in 0..size {
+                out.push(self.from_nested(zoc.ij2h(col, row)));
+            }
+        }
+
+        out
+    }
 }
 
 /// Create a [`Grid`] handle from plain options.
@@ -260,6 +373,65 @@ mod tests {
         let center = grid.center(164);
         let cell = grid.cell_at(center.lon, center.lat);
         assert_eq!(cell, 164);
+    }
+
+    #[test]
+    fn test_vertices_matches_scalar_vertex() {
+        let grid = Grid::from_options(options(Scheme::Nested, Some(4), None)).unwrap();
+        let steps = 5u32;
+
+        let bulk = grid.vertices_impl(164, steps).unwrap();
+        assert_eq!(bulk.len(), (steps * steps * 2) as usize);
+
+        let scale = 1.0 / f64::from(steps - 1);
+        for i in 0..steps {
+            for j in 0..steps {
+                let scalar = grid.vertex(164, f64::from(i) * scale, f64::from(j) * scale);
+                let offset = ((i * steps + j) * 2) as usize;
+                assert_eq!(bulk[offset], scalar.lon);
+                assert_eq!(bulk[offset + 1], scalar.lat);
+            }
+        }
+    }
+
+    #[test]
+    fn test_vertices_rejects_degenerate_steps() {
+        let grid = Grid::from_options(options(Scheme::Nested, Some(4), None)).unwrap();
+        assert!(grid.vertices_impl(164, 1).is_err());
+    }
+
+    #[test]
+    fn test_cells_at_and_centers_roundtrip() {
+        let grid = Grid::from_options(options(Scheme::Ring, Some(4), None)).unwrap();
+        let cells: Vec<u64> = vec![0, 164, 700];
+
+        let centers = grid.centers(&cells);
+        assert_eq!(centers.len(), cells.len() * 2);
+
+        let roundtrip = grid.cells_at_impl(&centers).unwrap();
+        assert_eq!(roundtrip, cells);
+    }
+
+    #[test]
+    fn test_cells_at_rejects_odd_length() {
+        let grid = Grid::from_options(options(Scheme::Nested, Some(4), None)).unwrap();
+        assert!(grid.cells_at_impl(&[45.0, 0.0, 90.0]).is_err());
+    }
+
+    #[test]
+    fn test_bit_combine_table_matches_scalar() {
+        let grid = Grid::from_options(options(Scheme::Nested, Some(3), None)).unwrap();
+        let size = 8u32;
+
+        let table = grid.bit_combine_table(size);
+        for row in 0..size {
+            for col in 0..size {
+                assert_eq!(
+                    table[(row * size + col) as usize],
+                    grid.bit_combine(col, row)
+                );
+            }
+        }
     }
 
     #[test]
