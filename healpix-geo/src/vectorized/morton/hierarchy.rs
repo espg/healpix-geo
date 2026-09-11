@@ -22,6 +22,10 @@ pub fn parent(ipix: &[u64], depth: &u8, nthreads: usize) -> Vec<u64> {
 }
 
 /// Whether `ancestor` contains each of `ipix` (containment-is-truncation).
+///
+/// Element-wise [`scalar::contains`], with the same rules: an `ancestor` that
+/// is not a canonical area word contains nothing, so every element is `false`
+/// rather than a panic.
 pub fn contains(ancestor: &u64, ipix: &[u64], nthreads: usize) -> Vec<bool> {
     let mut result = Vec::<bool>::with_capacity(ipix.len());
     maybe_parallelize!(nthreads, ipix, result, |hash| scalar::contains(
@@ -50,5 +54,9 @@ mod tests {
 
         let elsewhere = from_nested(&40, &2);
         assert_eq!(contains(&elsewhere, &words, 1), vec![false, false]);
+
+        // an ancestor that is not a canonical area word contains nothing
+        let junk = ancestor | (1 << 30);
+        assert_eq!(contains(&junk, &words, 1), vec![false, false]);
     }
 }

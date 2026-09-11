@@ -19,13 +19,33 @@ pub fn parent(hash: &u64, depth: &u8) -> Option<u64> {
 
 /// Containment-is-truncation: whether `ancestor` contains `descendant`.
 ///
-/// True iff truncating `descendant` to `ancestor`'s depth yields exactly
-/// `ancestor` — no coordinate math involved. Reflexive for canonical area
-/// words (`contains(w, w)` is true); false whenever either word does not
-/// decode or `ancestor` is not canonical.
+/// Decided on the decoded cell paths, so that it answers the question a tiled
+/// store asks — does this word fall inside that tile — rather than a question
+/// about bit patterns:
+///
+/// - `ancestor` must be a canonical **area** word: a point word claims no
+///   area, so it contains nothing, not even itself, and a non-canonical word
+///   is not an id at all.
+/// - `descendant` may be any canonical word, area or point.
+/// - true iff `ancestor` is no deeper than `descendant` and truncating
+///   `descendant`'s nested path to `ancestor`'s depth yields `ancestor`'s
+///   cell — no coordinate math involved.
+///
+/// So it is reflexive exactly on canonical area words, and a depth-29 area
+/// cell contains the point words falling inside it — which comparing the
+/// truncated *words* instead of the cells they name would miss.
 pub fn contains(ancestor: &u64, descendant: &u64) -> bool {
-    depth(ancestor) <= depth(descendant)
-        && mortie::coarsen(*descendant, depth(ancestor)) == Some(*ancestor)
+    use super::conversion::{is_canonical, is_point, to_nested};
+
+    if is_point(ancestor) || !is_canonical(ancestor) || !is_canonical(descendant) {
+        return false;
+    }
+
+    // canonicality implies both words decode
+    let (nested_a, depth_a) = to_nested(ancestor).unwrap();
+    let (nested_b, depth_b) = to_nested(descendant).unwrap();
+
+    depth_a <= depth_b && nested_b >> (2 * u32::from(depth_b - depth_a)) == nested_a
 }
 
 #[cfg(test)]
@@ -72,6 +92,38 @@ mod tests {
         // invalid words never contain or get contained
         assert!(!contains(&0, &child));
         assert!(!contains(&child, &0));
+    }
+
+    #[test]
+    fn test_contains_requires_a_canonical_ancestor() {
+        let word = from_nested(&164, &3);
+        let junk = word | (1 << 30); // decodes to the same cell, not canonical
+
+        assert!(!contains(&junk, &junk));
+        assert!(!contains(&junk, &word));
+        assert!(!contains(&word, &junk));
+        assert!(!contains(&0, &0));
+        assert!(!contains(&u64::MAX, &u64::MAX));
+    }
+
+    #[test]
+    fn test_contains_covers_point_words() {
+        use crate::scalar::morton::conversion::from_nested_point;
+
+        let nested = 164u64 << (2 * 26);
+        let point = from_nested_point(&nested);
+        let area = from_nested(&nested, &29);
+
+        // the depth-29 area cell covering a point contains it, as does every
+        // proper ancestor
+        assert!(contains(&area, &point));
+        assert!(contains(&from_nested(&164, &3), &point));
+        assert!(contains(&from_nested(&(164 >> 6), &0), &point));
+        assert!(!contains(&from_nested(&165, &3), &point));
+
+        // a point claims no area, so it contains nothing — not even itself
+        assert!(!contains(&point, &point));
+        assert!(!contains(&point, &area));
     }
 
     #[test]

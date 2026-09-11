@@ -62,7 +62,9 @@ impl Morton {
     /// Whether `ancestor` contains `descendant` (containment-is-truncation)
     ///
     /// True iff truncating `descendant` to `ancestor`'s level yields exactly
-    /// `ancestor`; a cell contains itself.
+    /// `ancestor`; a cell contains itself. Both ids are validated first, so
+    /// anything that is not a canonical area word throws rather than
+    /// answering `false`.
     #[wasm_bindgen(js_name = contains)]
     pub fn contains(ancestor: u64, descendant: u64) -> Result<bool, JsValue> {
         Morton::contains_impl(ancestor, descendant).map_err(|message| JsError::new(&message).into())
