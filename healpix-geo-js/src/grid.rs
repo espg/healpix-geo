@@ -56,14 +56,28 @@ fn from_zuniq_checked(cell: u64) -> Result<(u8, u64), String> {
 
 /// Decode a `morton` cell id.
 ///
-/// Only canonical words are accepted: `mortie-core` zero-fills every bit
-/// below a cell's level, so each cell has exactly one bit pattern, and a
+/// Only canonical *area* words are accepted: `mortie-core` zero-fills every
+/// bit below a cell's level, so each cell has exactly one bit pattern, and a
 /// word carrying junk in those bits would silently alias another id of the
-/// same cell. Max-encoded point words (a coordinate cast to level 29 with
-/// no area claim) are valid ids of their level-29 cell.
+/// same cell.
+///
+/// Max-encoded point words (a coordinate cast to level 29 with no area claim)
+/// alias in exactly that way — a point and the level-29 area cell covering it
+/// are two distinct canonical words that decode to the same `(level, hash)`,
+/// so nothing downstream of this function can tell them apart and no
+/// conversion round-trip can preserve them. A point claims no area, which is
+/// also what `vertex`/`vertices` would need, so it is not a cell id: it stays
+/// a codec-level concept, constructed and inspected through the core crate
+/// (`from_nested_point`, `to_nested`, `is_canonical`).
 pub(crate) fn from_morton_checked(cell: u64) -> Result<(u8, u64), String> {
     if !morton_scalar::conversion::is_canonical(&cell) {
         return Err(format!("{} is not a valid morton cell id", cell));
+    }
+    if morton_scalar::conversion::is_point(&cell) {
+        return Err(format!(
+            "{} is a max-encoded point word, not a morton cell id",
+            cell
+        ));
     }
 
     // is_canonical implies the word decodes
@@ -521,7 +535,10 @@ impl Grid {
     /// Create a grid from plain options.
     ///
     /// Options:
-    /// - `scheme`: `"nested"`, `"ring"`, `"zuniq"` or `"morton"` (required)
+    /// - `scheme`: `"nested"`, `"ring"`, `"zuniq"` or `"morton"` (required).
+    ///   A `morton` grid takes canonical area words only; max-encoded point
+    ///   words are a codec-level concept with no area claim, and every method
+    ///   that takes a cell id rejects them.
     /// - `level`: the refinement level, at most 29; level 0 is the 12 base
     ///   cells (required)
     /// - `ellipsoid`: a plain object as accepted by `Ellipsoid.from`, or
@@ -866,9 +883,11 @@ mod tests {
         assert!(grid.vertex_impl(valid, 0.5, 0.5).is_ok());
         assert!(grid.vertex_impl(valid | (1 << 30), 0.5, 0.5).is_err());
 
-        // a max-encoded point word is a valid id of its level-29 cell
+        // a max-encoded point word claims no area and aliases the level-29
+        // area cell covering it, so it is not a cell id
         let point = morton_scalar::conversion::from_nested_point(&(164u64 << (2 * 26)));
-        assert!(grid.vertex_impl(point, 0.5, 0.5).is_ok());
+        assert!(grid.vertex_impl(point, 0.5, 0.5).is_err());
+        assert!(grid.to_scheme_impl(point, Scheme::Nested, None).is_err());
     }
 
     #[test]

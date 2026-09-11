@@ -8,6 +8,10 @@ const BASE0_L0 = 1152921504606846976n; // from_nested(0, 0)
 const CELL164_L3 = 4107282860161892355n; // from_nested(164, 3)
 const CELL41_L2 = 4107282860161892354n; // from_nested(41, 2) == parent of 164@3
 const CELL41_L1 = 4035225266123964417n; // from_nested(10, 1)
+// a max-encoded point word and the level-29 area cell covering it:
+// from_nested_point(164 << 52) and from_nested(164 << 52, 29)
+const POINT_L29 = 4107282860161892400n;
+const AREA_L29 = 4107282860161892381n;
 
 describe("morton statics", () => {
   test("level reads the embedded refinement level", () => {
@@ -53,6 +57,18 @@ describe("morton statics", () => {
       healpixGeo.morton.contains(CELL164_L3, 2n ** 64n - 1n),
     ).to.throw();
   });
+
+  test("max-encoded point words are not cell ids", () => {
+    // a point word and the level-29 area cell covering it decode to the same
+    // (level, cell), so a point is not an id the statics can distinguish
+    expect(() => healpixGeo.morton.level(POINT_L29)).to.throw(
+      "not a morton cell id",
+    );
+    expect(() => healpixGeo.morton.parent(POINT_L29, 3)).to.throw();
+    expect(() => healpixGeo.morton.contains(AREA_L29, POINT_L29)).to.throw();
+    // the area word of the same body is unaffected
+    expect(healpixGeo.morton.level(AREA_L29)).to.equal(29);
+  });
 });
 
 describe("morton grid", () => {
@@ -86,6 +102,11 @@ describe("morton grid", () => {
     expect(() => grid.vertex(2n ** 64n - 1n, 0.5, 0.5)).to.throw();
     // junk below the encoded level makes the word non-canonical
     expect(() => grid.vertex(CELL164_L3 | (1n << 30n), 0.5, 0.5)).to.throw();
+    // a max-encoded point word claims no area, so it is not a cell id
+    expect(() => grid.vertex(POINT_L29, 0.5, 0.5)).to.throw(
+      "not a morton cell id",
+    );
+    expect(() => grid.toScheme(POINT_L29, "nested")).to.throw();
   });
 
   test("toScheme round-trips through nested and zuniq", () => {

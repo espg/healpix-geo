@@ -11,6 +11,11 @@ use crate::grid::{from_morton_checked, to_level};
 /// testing is plain prefix truncation. None of these operations need a
 /// reference body, so they live here rather than on `Grid`; coordinate math
 /// on morton ids goes through `new Grid({ scheme: "morton", ... })`.
+///
+/// Every method validates its ids the way `Grid` does, so all of them take
+/// canonical area words only: max-encoded point words (a coordinate cast to
+/// level 29 with no area claim) are rejected here too and stay a codec-level
+/// concept of the core crate.
 #[wasm_bindgen(js_name = morton)]
 pub struct Morton;
 
@@ -103,5 +108,22 @@ mod tests {
         assert!(Morton::contains_impl(child, child).unwrap());
         assert!(Morton::contains_impl(0, child).is_err());
         assert!(Morton::contains_impl(child, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn test_rejects_point_words() {
+        use healpix_geo::scalar::morton::conversion::from_nested_point;
+
+        let nested = 164u64 << (2 * 26);
+        let point = from_nested_point(&nested);
+        let area = from_nested(&nested, &29);
+
+        assert!(Morton::level_impl(point).is_err());
+        assert!(Morton::parent_impl(point, 3.0).is_err());
+        assert!(Morton::contains_impl(point, point).is_err());
+        assert!(Morton::contains_impl(area, point).is_err());
+
+        // the area cell of the same body is unaffected
+        assert_eq!(Morton::level_impl(area).unwrap(), 29);
     }
 }

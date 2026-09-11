@@ -67,6 +67,17 @@ pub fn to_zuniq(hash: &u64) -> Option<u64> {
     Some(healpix::nested::to_zuniq(depth, nested))
 }
 
+/// Whether `hash` is a max-encoded *point* word rather than an area cell.
+///
+/// Total over every bit pattern — the suffix region alone decides the kind —
+/// so this says nothing about whether the word decodes or is canonical; pair
+/// it with [`is_canonical`] for untrusted input.
+pub fn is_point(hash: &u64) -> bool {
+    use mortie_core::decimal_morton::{Kind, kind_of};
+
+    kind_of(*hash) == Kind::Point
+}
+
 /// Whether `hash` is a canonical Morton word.
 ///
 /// Encoding zero-fills every bit below a cell's depth, so each cell has
@@ -159,5 +170,13 @@ mod tests {
         assert_eq!(point, 4107282860161892400);
         assert!(is_canonical(&point));
         assert_eq!(to_nested(&point), Some((164u64 << (2 * 26), 29)));
+    }
+
+    #[test]
+    fn test_is_point_separates_the_kinds() {
+        let nested = 164u64 << (2 * 26);
+        assert!(is_point(&from_nested_point(&nested)));
+        assert!(!is_point(&from_nested(&nested, &29)));
+        assert!(!is_point(&from_nested(&164, &3)));
     }
 }
