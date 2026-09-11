@@ -43,7 +43,7 @@ describe("generated index.d.ts", () => {
   test("the Grid constructor takes typed options, not `any`", () => {
     expectTypeOf(Grid).constructorParameters.toEqualTypeOf<[GridOptions]>();
     expectTypeOf<GridOptions["scheme"]>().toEqualTypeOf<
-      "nested" | "ring" | "zuniq"
+      "nested" | "ring" | "zuniq" | "morton"
     >();
     expectTypeOf<GridOptions["level"]>().toEqualTypeOf<number>();
     expectTypeOf<GridOptions["ellipsoid"]>().toEqualTypeOf<
@@ -54,14 +54,16 @@ describe("generated index.d.ts", () => {
   test("the scheme getter is narrowed to the literal union", () => {
     // widened to `string`, `other.toScheme(cell, grid.scheme)` does not
     // type-check and `switch (grid.scheme)` gets no exhaustiveness check
-    expectTypeOf<Grid["scheme"]>().toEqualTypeOf<"nested" | "ring" | "zuniq">();
+    expectTypeOf<Grid["scheme"]>().toEqualTypeOf<
+      "nested" | "ring" | "zuniq" | "morton"
+    >();
     expectTypeOf<Grid["level"]>().toEqualTypeOf<number>();
   });
 
   test("toScheme narrows its target and takes an optional level", () => {
     expectTypeOf<Grid["toScheme"]>()
       .parameter(1)
-      .toEqualTypeOf<"nested" | "ring" | "zuniq">();
+      .toEqualTypeOf<"nested" | "ring" | "zuniq" | "morton">();
     expectTypeOf<Grid["toScheme"]>()
       .parameter(2)
       .toEqualTypeOf<number | null | undefined>();
