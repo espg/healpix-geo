@@ -26,19 +26,19 @@ describe("morton statics", () => {
     expect(() => healpixGeo.morton.level(2n ** 64n - 1n)).to.throw();
   });
 
-  test("parent truncates to the requested level", () => {
-    expect(healpixGeo.morton.parent(CELL164_L3, 2)).to.equal(CELL41_L2);
-    expect(healpixGeo.morton.parent(CELL164_L3, 1)).to.equal(CELL41_L1);
+  test("ancestor truncates to the requested level", () => {
+    expect(healpixGeo.morton.ancestor(CELL164_L3, 2)).to.equal(CELL41_L2);
+    expect(healpixGeo.morton.ancestor(CELL164_L3, 1)).to.equal(CELL41_L1);
     // at or above the embedded level, the id is unchanged
-    expect(healpixGeo.morton.parent(CELL164_L3, 3)).to.equal(CELL164_L3);
-    expect(healpixGeo.morton.parent(CELL164_L3, 29)).to.equal(CELL164_L3);
+    expect(healpixGeo.morton.ancestor(CELL164_L3, 3)).to.equal(CELL164_L3);
+    expect(healpixGeo.morton.ancestor(CELL164_L3, 29)).to.equal(CELL164_L3);
   });
 
-  test("parent validates its inputs", () => {
-    expect(() => healpixGeo.morton.parent(0n, 2)).to.throw();
-    expect(() => healpixGeo.morton.parent(CELL164_L3, 2.5)).to.throw();
-    expect(() => healpixGeo.morton.parent(CELL164_L3, 30)).to.throw();
-    expect(() => healpixGeo.morton.parent(CELL164_L3, -1)).to.throw();
+  test("ancestor validates its inputs", () => {
+    expect(() => healpixGeo.morton.ancestor(0n, 2)).to.throw();
+    expect(() => healpixGeo.morton.ancestor(CELL164_L3, 2.5)).to.throw();
+    expect(() => healpixGeo.morton.ancestor(CELL164_L3, 30)).to.throw();
+    expect(() => healpixGeo.morton.ancestor(CELL164_L3, -1)).to.throw();
   });
 
   test("contains is containment-is-truncation", () => {
@@ -64,7 +64,7 @@ describe("morton statics", () => {
     expect(() => healpixGeo.morton.level(POINT_L29)).to.throw(
       "not a morton cell id",
     );
-    expect(() => healpixGeo.morton.parent(POINT_L29, 3)).to.throw();
+    expect(() => healpixGeo.morton.ancestor(POINT_L29, 3)).to.throw();
     expect(() => healpixGeo.morton.contains(AREA_L29, POINT_L29)).to.throw();
     // the area word of the same body is unaffected
     expect(healpixGeo.morton.level(AREA_L29)).to.equal(29);

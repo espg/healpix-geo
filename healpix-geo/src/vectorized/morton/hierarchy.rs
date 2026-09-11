@@ -12,10 +12,10 @@ pub fn depth(ipix: &[u64], nthreads: usize) -> Vec<u8> {
     result
 }
 
-/// Vectorized [`scalar::parent`]; panics on a word that does not decode.
-pub fn parent(ipix: &[u64], depth: &u8, nthreads: usize) -> Vec<u64> {
+/// Vectorized [`scalar::ancestor`]; panics on a word that does not decode.
+pub fn ancestor(ipix: &[u64], depth: &u8, nthreads: usize) -> Vec<u64> {
     let mut result = Vec::<u64>::with_capacity(ipix.len());
-    maybe_parallelize!(nthreads, ipix, result, |hash| scalar::parent(hash, depth)
+    maybe_parallelize!(nthreads, ipix, result, |hash| scalar::ancestor(hash, depth)
         .unwrap_or_else(|| panic!("{} is not a valid morton cell id", hash)));
 
     result
@@ -41,22 +41,22 @@ mod tests {
     use crate::scalar::morton::conversion::from_nested;
 
     #[test]
-    fn test_parent_and_contains() {
+    fn test_ancestor_and_contains() {
         let words: Vec<u64> = vec![from_nested(&164, &3), from_nested(&165, &3)];
 
         assert_eq!(depth(&words, 1), vec![3, 3]);
 
-        let parents = parent(&words, &2, 1);
-        assert_eq!(parents, vec![from_nested(&41, &2), from_nested(&41, &2)]);
+        let ancestors = ancestor(&words, &2, 1);
+        assert_eq!(ancestors, vec![from_nested(&41, &2), from_nested(&41, &2)]);
 
-        let ancestor = from_nested(&41, &2);
-        assert_eq!(contains(&ancestor, &words, 1), vec![true, true]);
+        let covering = from_nested(&41, &2);
+        assert_eq!(contains(&covering, &words, 1), vec![true, true]);
 
         let elsewhere = from_nested(&40, &2);
         assert_eq!(contains(&elsewhere, &words, 1), vec![false, false]);
 
         // an ancestor that is not a canonical area word contains nothing
-        let junk = ancestor | (1 << 30);
+        let junk = covering | (1 << 30);
         assert_eq!(contains(&junk, &words, 1), vec![false, false]);
     }
 }

@@ -11,9 +11,12 @@ pub fn depth(hash: &u64) -> u8 {
 
 /// The ancestor of a Morton word at `depth`, discarding finer detail.
 ///
-/// Returns the word unchanged when `depth >=` its own depth, and `None` if
-/// the word does not decode.
-pub fn parent(hash: &u64, depth: &u8) -> Option<u64> {
+/// `depth` is the **absolute** depth to land at, not a number of levels to
+/// drop — the opposite reading of the `delta_depth` taken by
+/// [`crate::vectorized::nested::hierarchy::parents`], which is why this is
+/// not called `parent`. Returns the word unchanged when `depth >=` its own
+/// depth, and `None` if the word does not decode.
+pub fn ancestor(hash: &u64, depth: &u8) -> Option<u64> {
     mortie::coarsen(*hash, *depth)
 }
 
@@ -61,21 +64,21 @@ mod tests {
     }
 
     #[test]
-    fn test_parent_golden() {
+    fn test_ancestor_golden() {
         // generated with the published mortie-core 0.1.0
         let word = from_nested(&164, &3);
-        assert_eq!(parent(&word, &1), Some(4035225266123964417));
-        assert_eq!(parent(&word, &2), Some(4107282860161892354));
-        assert_eq!(parent(&word, &3), Some(word));
-        assert_eq!(parent(&word, &29), Some(word));
-        assert_eq!(parent(&0, &1), None);
+        assert_eq!(ancestor(&word, &1), Some(4035225266123964417));
+        assert_eq!(ancestor(&word, &2), Some(4107282860161892354));
+        assert_eq!(ancestor(&word, &3), Some(word));
+        assert_eq!(ancestor(&word, &29), Some(word));
+        assert_eq!(ancestor(&0, &1), None);
     }
 
     #[test]
-    fn test_parent_matches_nested_truncation() {
+    fn test_ancestor_matches_nested_truncation() {
         // nested 164 at depth 3 sits under nested 164 >> 2 at depth 2
         let word = from_nested(&164, &3);
-        assert_eq!(parent(&word, &2), Some(from_nested(&(164 >> 2), &2)));
+        assert_eq!(ancestor(&word, &2), Some(from_nested(&(164 >> 2), &2)));
     }
 
     #[test]

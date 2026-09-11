@@ -26,12 +26,12 @@ impl Morton {
         Ok(level)
     }
 
-    pub(crate) fn parent_impl(cell: u64, level: f64) -> Result<u64, String> {
+    pub(crate) fn ancestor_impl(cell: u64, level: f64) -> Result<u64, String> {
         from_morton_checked(cell)?;
         let level = to_level(level)?;
 
-        // the id decodes (checked above), so `parent` cannot return `None`
-        Ok(hierarchy::parent(&cell, &level).unwrap())
+        // the id decodes (checked above), so `ancestor` cannot return `None`
+        Ok(hierarchy::ancestor(&cell, &level).unwrap())
     }
 
     pub(crate) fn contains_impl(ancestor: u64, descendant: u64) -> Result<bool, String> {
@@ -52,11 +52,12 @@ impl Morton {
 
     /// The ancestor of the given cell id at `level`
     ///
-    /// Truncates the id to `level`, discarding finer detail; a `level` at or
+    /// Truncates the id to `level`, discarding finer detail; `level` is the
+    /// level to land at, not a number of levels to drop, and a `level` at or
     /// above the id's own level returns the id unchanged.
-    #[wasm_bindgen(js_name = parent)]
-    pub fn parent(cell: u64, level: f64) -> Result<u64, JsValue> {
-        Morton::parent_impl(cell, level).map_err(|message| JsError::new(&message).into())
+    #[wasm_bindgen(js_name = ancestor)]
+    pub fn ancestor(cell: u64, level: f64) -> Result<u64, JsValue> {
+        Morton::ancestor_impl(cell, level).map_err(|message| JsError::new(&message).into())
     }
 
     /// Whether `ancestor` contains `descendant` (containment-is-truncation)
@@ -85,19 +86,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parent() {
+    fn test_ancestor() {
         let cell = from_nested(&164, &3);
 
         assert_eq!(
-            Morton::parent_impl(cell, 2.0).unwrap(),
+            Morton::ancestor_impl(cell, 2.0).unwrap(),
             from_nested(&41, &2)
         );
-        assert_eq!(Morton::parent_impl(cell, 3.0).unwrap(), cell);
-        assert_eq!(Morton::parent_impl(cell, 29.0).unwrap(), cell);
-        assert!(Morton::parent_impl(0, 2.0).is_err());
-        assert!(Morton::parent_impl(cell, 2.5).is_err());
-        assert!(Morton::parent_impl(cell, 30.0).is_err());
-        assert!(Morton::parent_impl(cell, -1.0).is_err());
+        assert_eq!(Morton::ancestor_impl(cell, 3.0).unwrap(), cell);
+        assert_eq!(Morton::ancestor_impl(cell, 29.0).unwrap(), cell);
+        assert!(Morton::ancestor_impl(0, 2.0).is_err());
+        assert!(Morton::ancestor_impl(cell, 2.5).is_err());
+        assert!(Morton::ancestor_impl(cell, 30.0).is_err());
+        assert!(Morton::ancestor_impl(cell, -1.0).is_err());
     }
 
     #[test]
@@ -121,7 +122,7 @@ mod tests {
         let area = from_nested(&nested, &29);
 
         assert!(Morton::level_impl(point).is_err());
-        assert!(Morton::parent_impl(point, 3.0).is_err());
+        assert!(Morton::ancestor_impl(point, 3.0).is_err());
         assert!(Morton::contains_impl(point, point).is_err());
         assert!(Morton::contains_impl(area, point).is_err());
 
