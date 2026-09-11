@@ -1,6 +1,7 @@
 use cdshealpix as healpix;
 use geodesy::prelude::EllipsoidBase;
 use healpix_geo::ellipsoid::{Ellipsoid as RustEllipsoid, ReferenceBody};
+use healpix_geo::scalar::morton as morton_scalar;
 use healpix_geo::scalar::nested::coordinates as scalar;
 use serde::Deserialize;
 use serde_wasm_bindgen::from_value;
@@ -53,6 +54,38 @@ fn from_zuniq_checked(cell: u64) -> Result<(u8, u64), String> {
     Ok((level, hash))
 }
 
+/// Decode a `morton` cell id.
+///
+/// Only canonical *area* words are accepted: `mortie-core` zero-fills every
+/// bit below a cell's level, so each cell has exactly one bit pattern, and a
+/// word carrying junk in those bits would silently alias another id of the
+/// same cell.
+///
+/// Max-encoded point words (a coordinate cast to level 29 with no area claim)
+/// alias in exactly that way — a point and the level-29 area cell covering it
+/// are two distinct canonical words that decode to the same `(level, hash)`,
+/// so nothing downstream of this function can tell them apart and no
+/// conversion round-trip can preserve them. A point claims no area, which is
+/// also what `vertex`/`vertices` would need, so it is not a cell id: it stays
+/// a codec-level concept, constructed and inspected through the core crate
+/// (`from_nested_point`, `to_nested`, `is_canonical`).
+pub(crate) fn from_morton_checked(cell: u64) -> Result<(u8, u64), String> {
+    if !morton_scalar::conversion::is_canonical(&cell) {
+        return Err(format!("{} is not a valid morton cell id", cell));
+    }
+    if morton_scalar::conversion::is_point(&cell) {
+        return Err(format!(
+            "{} is a max-encoded point word, not a morton cell id",
+            cell
+        ));
+    }
+
+    // is_canonical implies the word decodes
+    let (hash, level) = morton_scalar::conversion::to_nested(&cell).unwrap();
+
+    Ok((level, hash))
+}
+
 /// Narrow a JS `number` to a `u32`, rejecting what wasm-bindgen would coerce.
 ///
 /// wasm-bindgen converts a `number` parameter declared as `u32` with
@@ -82,7 +115,7 @@ fn to_u32(value: f64, name: &str) -> Result<u32, String> {
 /// Range-checked against the level bound directly instead of narrowing through
 /// `to_u32` first, so a negative level is reported as out of `[0, 29]` rather
 /// than out of the `u32` range, which is not this parameter's contract.
-fn to_level(value: f64) -> Result<u8, String> {
+pub(crate) fn to_level(value: f64) -> Result<u8, String> {
     if !value.is_finite() || value.fract() != 0.0 {
         return Err(format!("`level` must be an integer, got {}", value));
     }
@@ -102,6 +135,7 @@ pub(crate) enum Scheme {
     Nested,
     Ring,
     Zuniq,
+    Morton,
 }
 
 impl Scheme {
@@ -110,6 +144,7 @@ impl Scheme {
             Self::Nested => "nested",
             Self::Ring => "ring",
             Self::Zuniq => "zuniq",
+            Self::Morton => "morton",
         }
     }
 
@@ -118,11 +153,17 @@ impl Scheme {
             "nested" => Ok(Self::Nested),
             "ring" => Ok(Self::Ring),
             "zuniq" => Ok(Self::Zuniq),
+            "morton" => Ok(Self::Morton),
             _ => Err(format!(
-                "unknown scheme {:?}: expected \"nested\", \"ring\" or \"zuniq\"",
+                "unknown scheme {:?}: expected \"nested\", \"ring\", \"zuniq\" or \"morton\"",
                 name
             )),
         }
+    }
+
+    /// Whether cell ids of this scheme encode their own refinement level.
+    fn encodes_level(&self) -> bool {
+        matches!(self, Self::Zuniq | Self::Morton)
     }
 }
 
@@ -137,7 +178,7 @@ pub(crate) struct GridOptions {
 /// The options object accepted by the `Grid` constructor.
 #[wasm_bindgen(typescript_custom_section)]
 const GRID_OPTIONS: &'static str = r#"
-export type IndexingScheme = "nested" | "ring" | "zuniq";
+export type IndexingScheme = "nested" | "ring" | "zuniq" | "morton";
 export type GridOptions = {
     scheme: IndexingScheme;
     level: number;
@@ -240,6 +281,7 @@ impl Grid {
                 Ok((self.level, healpix::nested::get(self.level).from_ring(cell)))
             }
             Scheme::Zuniq => from_zuniq_checked(cell),
+            Scheme::Morton => from_morton_checked(cell),
         }
     }
 
@@ -249,21 +291,23 @@ impl Grid {
             Scheme::Nested => hash,
             Scheme::Ring => healpix::nested::get(self.level).to_ring(hash),
             Scheme::Zuniq => healpix::nested::to_zuniq(self.level, hash),
+            Scheme::Morton => morton_scalar::conversion::from_nested(&hash, &self.level),
         }
     }
 
     /// Convert a cell id from the grid's scheme to `target`.
     ///
     /// Without `level`: `nested` ↔ `ring` convert at the grid's level;
-    /// converting *to* `zuniq` encodes the grid's level; converting *from*
-    /// `zuniq` uses the level embedded in the id (as [`Grid::vertex_impl`]
-    /// does), so the result lives at that level and `zuniq` → `zuniq` is the
-    /// identity.
+    /// converting *to* `zuniq` or `morton` encodes the grid's level;
+    /// converting *from* `zuniq` or `morton` uses the level embedded in the
+    /// id (as [`Grid::vertex_impl`] does), so the result lives at that level,
+    /// `zuniq` → `zuniq` and `morton` → `morton` are the identity, and
+    /// `zuniq` ↔ `morton` re-encode at the embedded level.
     ///
     /// With `level` (mirroring the Python bindings' `auto.convert`): only
-    /// valid when `target` encodes the level in its cell ids — `zuniq` today —
-    /// and the grid's scheme does not; `cell` is then read as a cell of the
-    /// grid's scheme at `level` and encoded with it.
+    /// valid when `target` encodes the level in its cell ids — `zuniq` and
+    /// `morton` — and the grid's scheme does not; `cell` is then read as a
+    /// cell of the grid's scheme at `level` and encoded with it.
     pub(crate) fn to_scheme_impl(
         &self,
         cell: u64,
@@ -277,18 +321,19 @@ impl Grid {
                 Scheme::Nested => hash,
                 Scheme::Ring => healpix::nested::get(level).to_ring(hash),
                 Scheme::Zuniq => healpix::nested::to_zuniq(level, hash),
+                Scheme::Morton => morton_scalar::conversion::from_nested(&hash, &level),
             });
         };
 
-        if self.scheme == Scheme::Zuniq {
-            return Err(
-                "`level` is invalid when converting from \"zuniq\": the cell ids already encode their level"
-                    .to_string(),
-            );
-        }
-        if target != Scheme::Zuniq {
+        if self.scheme.encodes_level() {
             return Err(format!(
-                "`level` is only valid when converting to a scheme that encodes the level in its cell ids (\"zuniq\"), not \"{}\"",
+                "`level` is invalid when converting from \"{}\": the cell ids already encode their level",
+                self.scheme.name()
+            ));
+        }
+        if !target.encodes_level() {
+            return Err(format!(
+                "`level` is only valid when converting to a scheme that encodes the level in its cell ids (\"zuniq\" or \"morton\"), not \"{}\"",
                 target.name()
             ));
         }
@@ -306,10 +351,14 @@ impl Grid {
         let hash = match self.scheme {
             Scheme::Nested => cell,
             Scheme::Ring => healpix::nested::get(level).from_ring(cell),
-            Scheme::Zuniq => unreachable!("rejected above"),
+            Scheme::Zuniq | Scheme::Morton => unreachable!("rejected above"),
         };
 
-        Ok(healpix::nested::to_zuniq(level, hash))
+        Ok(match target {
+            Scheme::Zuniq => healpix::nested::to_zuniq(level, hash),
+            Scheme::Morton => morton_scalar::conversion::from_nested(&hash, &level),
+            Scheme::Nested | Scheme::Ring => unreachable!("rejected above"),
+        })
     }
 
     pub(crate) fn vertex_impl(&self, cell: u64, u: f64, v: f64) -> Result<Coordinate, String> {
@@ -486,7 +535,10 @@ impl Grid {
     /// Create a grid from plain options.
     ///
     /// Options:
-    /// - `scheme`: `"nested"`, `"ring"` or `"zuniq"` (required)
+    /// - `scheme`: `"nested"`, `"ring"`, `"zuniq"` or `"morton"` (required).
+    ///   A `morton` grid takes canonical area words only; max-encoded point
+    ///   words are a codec-level concept with no area claim, and every method
+    ///   that takes a cell id rejects them.
     /// - `level`: the refinement level, at most 29; level 0 is the 12 base
     ///   cells (required)
     /// - `ellipsoid`: a plain object as accepted by `Ellipsoid.from`, or
@@ -500,7 +552,7 @@ impl Grid {
         Grid::from_options(options).map_err(|message| JsError::new(&message).into())
     }
 
-    /// The indexing scheme: "nested", "ring" or "zuniq"
+    /// The indexing scheme: "nested", "ring", "zuniq" or "morton"
     ///
     /// Narrowed to the literal union so that `other.toScheme(cell,
     /// grid.scheme)` type-checks and `switch (grid.scheme)` is exhaustive.
@@ -585,8 +637,8 @@ impl Grid {
     /// Single vertex of the given cell
     ///
     /// `u` and `v` are offsets from the southern vertex of the cell, in
-    /// `[0, 1]`; anything else throws. For the `zuniq` scheme, the level
-    /// encoded in the cell id is used.
+    /// `[0, 1]`; anything else throws. For the `zuniq` and `morton`
+    /// schemes, the level encoded in the cell id is used.
     pub fn vertex(&self, cell: u64, u: f64, v: f64) -> Result<Coordinate, JsValue> {
         self.vertex_impl(cell, u, v)
             .map_err(|message| JsError::new(&message).into())
@@ -625,7 +677,8 @@ impl Grid {
     /// `[lon0, lat0, lon1, lat1, ...]`. Rejects the whole batch, naming the
     /// offending index, if any cell id is invalid for this grid.
     ///
-    /// For a `zuniq` grid each id is read at the level embedded in it, so
+    /// For a `zuniq` or `morton` grid each id is read at the level
+    /// embedded in it, so
     /// feeding the result back through `lonLatToHealpix` re-encodes every
     /// cell at the grid's level (see `lonLatToHealpix`).
     #[wasm_bindgen(js_name = healpixToLonLat)]
@@ -641,7 +694,7 @@ impl Grid {
     /// Rejects the whole batch, naming the offending index, if any longitude
     /// is not finite or any latitude falls outside `[-90, 90]`.
     ///
-    /// For a `zuniq` grid this is **not** the exact inverse of
+    /// For a `zuniq` or `morton` grid this is **not** the exact inverse of
     /// `healpixToLonLat`: the ids produced here all carry the grid's level,
     /// while `healpixToLonLat` reads each input id at the level embedded in
     /// it. A mixed-level batch therefore comes back entirely at the grid's
@@ -670,16 +723,17 @@ impl Grid {
 
     /// Convert a cell id from the grid's scheme to another scheme
     ///
-    /// `scheme` is one of `"nested"`, `"ring"` or `"zuniq"`. `nested` and
-    /// `ring` convert at the grid's level. Converting to `zuniq` encodes the
-    /// grid's level; converting from `zuniq` uses the level encoded in the
-    /// cell id (as `vertex` does), so the result lives at that level and
-    /// `zuniq` to `zuniq` is the identity.
+    /// `scheme` is one of `"nested"`, `"ring"`, `"zuniq"` or `"morton"`.
+    /// `nested` and `ring` convert at the grid's level. Converting to
+    /// `zuniq` or `morton` encodes the grid's level; converting from `zuniq`
+    /// or `morton` uses the level encoded in the cell id (as `vertex` does),
+    /// so the result lives at that level and `zuniq` to `zuniq` (or `morton`
+    /// to `morton`) is the identity.
     ///
     /// The optional `level` overrides the level `cell` is read and encoded
     /// at. It is only valid when converting to a scheme that encodes the
-    /// level in its cell ids — `"zuniq"` today — and from a scheme that does
-    /// not (`nested` or `ring`); anything else throws.
+    /// level in its cell ids — `"zuniq"` or `"morton"` — and from a scheme
+    /// that does not (`nested` or `ring`); anything else throws.
     #[wasm_bindgen(js_name = toScheme)]
     pub fn to_scheme(
         &self,
@@ -788,10 +842,124 @@ mod tests {
     }
 
     #[test]
+    fn test_morton_uses_encoded_level() {
+        // level 0, nested cell 0 encoded as morton, read by a level-4 grid
+        let cell = morton_scalar::conversion::from_nested(&0, &0);
+        let grid = grid(Scheme::Morton, 4);
+
+        let vertex = grid.vertex_impl(cell, 0.0, 0.0).unwrap();
+        assert!((vertex.lon - 45.0).abs() < 1e-4);
+        assert!(vertex.lat.abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_morton_matches_nested_coordinates() {
+        let nested_grid = grid(Scheme::Nested, 4);
+        let morton_grid = grid(Scheme::Morton, 4);
+        let word = morton_scalar::conversion::from_nested(&164, &4);
+
+        assert_eq!(
+            morton_grid.healpix_to_lonlat_impl(&[word]).unwrap(),
+            nested_grid.healpix_to_lonlat_impl(&[164]).unwrap()
+        );
+
+        let centers = nested_grid.healpix_to_lonlat_impl(&[164]).unwrap();
+        assert_eq!(
+            morton_grid.lonlat_to_healpix_impl(&centers).unwrap(),
+            vec![word]
+        );
+    }
+
+    #[test]
+    fn test_rejects_invalid_morton_cells() {
+        let grid = grid(Scheme::Morton, 4);
+
+        // the empty sentinel and an invalid base-cell prefix
+        assert!(grid.vertex_impl(0, 0.5, 0.5).is_err());
+        assert!(grid.vertex_impl(u64::MAX, 0.5, 0.5).is_err());
+
+        // a word that decodes but is not the canonical bit pattern
+        let valid = morton_scalar::conversion::from_nested(&164, &3);
+        assert!(grid.vertex_impl(valid, 0.5, 0.5).is_ok());
+        assert!(grid.vertex_impl(valid | (1 << 30), 0.5, 0.5).is_err());
+
+        // a max-encoded point word claims no area and aliases the level-29
+        // area cell covering it, so it is not a cell id
+        let point = morton_scalar::conversion::from_nested_point(&(164u64 << (2 * 26)));
+        assert!(grid.vertex_impl(point, 0.5, 0.5).is_err());
+        assert!(grid.to_scheme_impl(point, Scheme::Nested, None).is_err());
+    }
+
+    #[test]
+    fn test_to_scheme_morton_encodes_the_grid_level() {
+        let nested = grid(Scheme::Nested, 4);
+        let id = nested.to_scheme_impl(164, Scheme::Morton, None).unwrap();
+        assert_eq!(id, morton_scalar::conversion::from_nested(&164, &4));
+
+        let morton = grid(Scheme::Morton, 4);
+        assert_eq!(
+            morton.to_scheme_impl(id, Scheme::Nested, None).unwrap(),
+            164
+        );
+    }
+
+    #[test]
+    fn test_to_scheme_morton_zuniq_roundtrip() {
+        // both schemes embed the level, so conversion crosses at the
+        // embedded level, not the grid's
+        let morton = grid(Scheme::Morton, 4);
+        let zuniq = grid(Scheme::Zuniq, 4);
+
+        let word = morton_scalar::conversion::from_nested(&5, &0);
+        let id = morton.to_scheme_impl(word, Scheme::Zuniq, None).unwrap();
+        assert_eq!(id, healpix::nested::to_zuniq(0, 5));
+        assert_eq!(
+            zuniq.to_scheme_impl(id, Scheme::Morton, None).unwrap(),
+            word
+        );
+
+        // morton -> morton keeps the id as-is
+        assert_eq!(
+            morton.to_scheme_impl(word, Scheme::Morton, None).unwrap(),
+            word
+        );
+    }
+
+    #[test]
+    fn test_to_scheme_morton_level_override() {
+        let nested = grid(Scheme::Nested, 4);
+
+        assert_eq!(
+            nested.to_scheme_impl(5, Scheme::Morton, Some(0.0)).unwrap(),
+            morton_scalar::conversion::from_nested(&5, &0)
+        );
+        // the cell id is validated against the override level
+        assert!(
+            nested
+                .to_scheme_impl(164, Scheme::Morton, Some(0.0))
+                .is_err()
+        );
+
+        // morton ids already carry their level, even for the identity
+        let morton = grid(Scheme::Morton, 4);
+        let id = morton_scalar::conversion::from_nested(&164, &4);
+        assert!(
+            morton
+                .to_scheme_impl(id, Scheme::Morton, Some(4.0))
+                .is_err()
+        );
+        assert!(
+            morton
+                .to_scheme_impl(id, Scheme::Nested, Some(4.0))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_bit_combine_rejects_out_of_range_coordinates() {
         // ring is the dangerous one: an out-of-range nested hash used to
         // panic inside `to_ring` ("assertion failed: j_d0h <= 2")
-        for scheme in [Scheme::Nested, Scheme::Ring, Scheme::Zuniq] {
+        for scheme in [Scheme::Nested, Scheme::Ring, Scheme::Zuniq, Scheme::Morton] {
             let grid = grid(scheme, 1);
             assert_eq!(grid.nside(), 2);
 
@@ -844,6 +1012,10 @@ mod tests {
             360287970189639680
         );
         assert_eq!(grid(Scheme::Ring, 1).bit_combine_impl(0.0, 1.0).unwrap(), 4);
+        assert_eq!(
+            grid(Scheme::Morton, 1).bit_combine_impl(0.0, 1.0).unwrap(),
+            morton_scalar::conversion::from_nested(&2, &1)
+        );
         assert_eq!(
             grid(Scheme::Nested, 1).bit_combine_impl(0.0, 1.0).unwrap(),
             2
@@ -1067,7 +1239,7 @@ mod tests {
     fn test_lonlat_to_healpix_rejects_out_of_range_coordinates() {
         // every one of these used to trap the wasm instance inside
         // `Layer::hash`'s `-FRAC_PI_2 <= lat <= FRAC_PI_2` assertion
-        for scheme in [Scheme::Nested, Scheme::Ring, Scheme::Zuniq] {
+        for scheme in [Scheme::Nested, Scheme::Ring, Scheme::Zuniq, Scheme::Morton] {
             let grid = grid(scheme, 4);
 
             assert!(grid.lonlat_to_healpix_impl(&[0.0, 100.0]).is_err());
@@ -1133,6 +1305,7 @@ mod tests {
             (Scheme::Nested, 12, 8),
             (Scheme::Ring, 5, 4),
             (Scheme::Zuniq, 5, 4),
+            (Scheme::Morton, 5, 4),
         ] {
             let grid = grid(scheme, level);
 
