@@ -6,8 +6,13 @@ import { describe, expect, test } from "vitest";
 // from_nested(nested, level)
 const BASE0_L0 = 1152921504606846976n; // from_nested(0, 0)
 const CELL164_L3 = 4107282860161892355n; // from_nested(164, 3)
-const CELL41_L2 = 4107282860161892354n; // from_nested(41, 2) == parent of 164@3
-const CELL41_L1 = 4035225266123964417n; // from_nested(10, 1)
+const CELL41_L2 = 4107282860161892354n; // from_nested(41, 2), the parent of 164@3
+const CELL10_L1 = 4035225266123964417n; // from_nested(10, 1), the parent of 41@2
+// the remaining three children of 41@2, and the level-2 cell after it
+const CELL165_L3 = 4125297258671374339n; // from_nested(165, 3)
+const CELL166_L3 = 4143311657180856323n; // from_nested(166, 3)
+const CELL167_L3 = 4161326055690338307n; // from_nested(167, 3)
+const CELL42_L2 = 4179340454199820290n; // from_nested(42, 2)
 // a max-encoded point word and the level-29 area cell covering it:
 // from_nested_point(164 << 52) and from_nested(164 << 52, 29)
 const POINT_L29 = 4107282860161892400n;
@@ -28,7 +33,7 @@ describe("morton statics", () => {
 
   test("ancestor truncates to the requested level", () => {
     expect(healpixGeo.morton.ancestor(CELL164_L3, 2)).to.equal(CELL41_L2);
-    expect(healpixGeo.morton.ancestor(CELL164_L3, 1)).to.equal(CELL41_L1);
+    expect(healpixGeo.morton.ancestor(CELL164_L3, 1)).to.equal(CELL10_L1);
     // at or above the embedded level, the id is unchanged
     expect(healpixGeo.morton.ancestor(CELL164_L3, 3)).to.equal(CELL164_L3);
     expect(healpixGeo.morton.ancestor(CELL164_L3, 29)).to.equal(CELL164_L3);
@@ -43,7 +48,7 @@ describe("morton statics", () => {
 
   test("contains is containment-is-truncation", () => {
     expect(healpixGeo.morton.contains(CELL41_L2, CELL164_L3)).to.equal(true);
-    expect(healpixGeo.morton.contains(CELL41_L1, CELL164_L3)).to.equal(true);
+    expect(healpixGeo.morton.contains(CELL10_L1, CELL164_L3)).to.equal(true);
     // not symmetric; reflexive
     expect(healpixGeo.morton.contains(CELL164_L3, CELL41_L2)).to.equal(false);
     expect(healpixGeo.morton.contains(CELL164_L3, CELL164_L3)).to.equal(true);
@@ -127,9 +132,51 @@ describe("morton grid", () => {
     expect(() => nested.toScheme(164n, "ring", 3)).to.throw();
   });
 
-  test("raw unsigned order sorts parents immediately before children", () => {
-    // the property gridlook's hive addressing relies on
-    expect(CELL41_L1 < CELL41_L2).to.equal(true);
-    expect(CELL41_L2 < CELL164_L3).to.equal(true);
+  test("a raw unsigned sort is a preorder traversal", () => {
+    // the property gridlook's hive addressing relies on: sorting mixed-level
+    // ids as unsigned integers walks the tree in preorder, so every parent
+    // lands immediately before its first child and its subtree is an unbroken
+    // run. 41@2 with all four of its children, plus two cells outside the
+    // subtree, deliberately shuffled.
+    const shuffled = [
+      CELL167_L3,
+      CELL42_L2,
+      CELL164_L3,
+      CELL10_L1,
+      CELL166_L3,
+      CELL41_L2,
+      CELL165_L3,
+    ];
+    // BigInt needs the explicit comparator; the default sort is lexicographic
+    const sorted = [...shuffled].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+    expect(sorted).to.deep.equal([
+      CELL10_L1,
+      CELL41_L2,
+      CELL164_L3,
+      CELL165_L3,
+      CELL166_L3,
+      CELL167_L3,
+      CELL42_L2,
+    ]);
+
+    // immediately: the first child is the very next word, not merely a later
+    // one
+    const parent = sorted.indexOf(CELL41_L2);
+    expect(sorted[parent + 1]).to.equal(CELL164_L3);
+    expect(CELL41_L2 + 1n).to.equal(CELL164_L3);
+
+    // contiguous: the run after the parent is exactly its subtree, with
+    // nothing foreign interleaved
+    const subtree = sorted.slice(parent, parent + 5);
+    expect(
+      subtree.every((id) => healpixGeo.morton.contains(CELL41_L2, id)),
+    ).to.equal(true);
+    expect(healpixGeo.morton.contains(CELL41_L2, sorted[parent - 1])).to.equal(
+      false,
+    );
+    expect(healpixGeo.morton.contains(CELL41_L2, sorted[parent + 5])).to.equal(
+      false,
+    );
   });
 });
