@@ -4,10 +4,22 @@ use rayon::prelude::*;
 use crate::maybe_parallelize;
 use crate::scalar::morton::hierarchy as scalar;
 
-/// Vectorized [`scalar::depth`].
+/// Vectorized [`scalar::depth`]; panics on a word that does not decode.
+///
+/// The scalar version is total over every bit pattern — it reads the suffix
+/// and asks nothing else — which in a batch would hand back a plausible level
+/// for an invalid word while every other function here panics. This one
+/// validates first, so the whole module fails the same way; pre-filter with
+/// [`super::conversion::is_canonical`] when the input is untrusted.
 pub fn depth(ipix: &[u64], nthreads: usize) -> Vec<u8> {
+    use crate::scalar::morton::conversion::to_nested;
+
     let mut result = Vec::<u8>::with_capacity(ipix.len());
-    maybe_parallelize!(nthreads, ipix, result, scalar::depth);
+    maybe_parallelize!(nthreads, ipix, result, |hash| {
+        to_nested(hash).unwrap_or_else(|| panic!("{} is not a valid morton cell id", hash));
+
+        scalar::depth(hash)
+    });
 
     result
 }
@@ -58,5 +70,12 @@ mod tests {
         // an ancestor that is not a canonical area word contains nothing
         let junk = covering | (1 << 30);
         assert_eq!(contains(&junk, &words, 1), vec![false, false]);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a valid morton cell id")]
+    fn test_depth_panics_on_a_word_that_does_not_decode() {
+        // the scalar version would report this as a level-0 cell
+        depth(&[from_nested(&164, &3), 0], 1);
     }
 }

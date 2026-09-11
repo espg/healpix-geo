@@ -75,6 +75,17 @@ pub fn from_zuniq(ipix: &[u64], nthreads: usize) -> Vec<u64> {
     result
 }
 
+/// Vectorized [`scalar::is_canonical`].
+///
+/// The validity predicate the scheme hangs on, and the way to pre-filter a
+/// batch before the functions here that panic on an invalid word.
+pub fn is_canonical(ipix: &[u64], nthreads: usize) -> Vec<bool> {
+    let mut result = Vec::<bool>::with_capacity(ipix.len());
+    maybe_parallelize!(nthreads, ipix, result, scalar::is_canonical);
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +111,16 @@ mod tests {
 
         let zuniq = to_zuniq(&words, 1);
         assert_eq!(from_zuniq(&zuniq, 1), words);
+    }
+
+    #[test]
+    fn test_is_canonical_pre_filters() {
+        let word = from_nested(&[164], Depth::Scalar(&3), 1)[0];
+
+        assert_eq!(
+            is_canonical(&[word, word | (1 << 30), 0, u64::MAX], 1),
+            vec![true, false, false, false]
+        );
     }
 
     #[test]
