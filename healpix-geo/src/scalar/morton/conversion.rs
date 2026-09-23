@@ -110,37 +110,71 @@ mod tests {
         assert_eq!(from_nested(&11, &0), 13835058055282163712);
     }
 
+    /// The low `2 * depth` bits of an arbitrary nonzero tuple pattern.
+    ///
+    /// The suffix packs the two deepest tuples into a single number
+    /// (`t28 * 5 + t29 + 1`), so a hash whose tuples are all zero exercises
+    /// none of that arithmetic.
+    fn tail(depth: u8) -> u64 {
+        0xC9B7 & ((1u64 << (2 * u32::from(depth))) - 1)
+    }
+
     #[test]
     fn test_nested_round_trip() {
         for depth in [0u8, 1, 3, 13, 27, 28, 29] {
             for base in 0u64..12 {
-                let hash = base << (2 * depth as u32); // first cell of the base
-                let word = from_nested(&hash, &depth);
+                let first = base << (2 * depth as u32); // first cell of the base
+                for hash in [first, first | tail(depth)] {
+                    let word = from_nested(&hash, &depth);
 
-                assert_eq!(to_nested(&word), Some((hash, depth)));
-                assert!(is_canonical(&word));
+                    assert_eq!(to_nested(&word), Some((hash, depth)));
+                    assert!(is_canonical(&word));
+                }
             }
         }
     }
 
     #[test]
-    fn test_ring_round_trip() {
-        let (hash, depth) = (164u64, 3u8);
-        let ring = healpix::nested::get(depth).to_ring(hash);
+    fn test_the_deepest_two_tuples_are_not_interchangeable() {
+        // swapping t28 and t29 has to change the word — the round trips above
+        // would pass either way if the tuples were always zero
+        let base = 2u64 << (2 * 29);
+        let (a, b) = (base | 0b01_10, base | 0b10_01);
 
-        let word = from_ring(&ring, &depth);
-        assert_eq!(word, from_nested(&hash, &depth));
-        assert_eq!(to_ring(&word), Some((ring, depth)));
+        assert_ne!(from_nested(&a, &29), from_nested(&b, &29));
+        assert_eq!(to_nested(&from_nested(&a, &29)), Some((a, 29)));
+        assert_eq!(to_nested(&from_nested(&b, &29)), Some((b, 29)));
+    }
+
+    /// A coarse cell plus two deep ones carrying a nonzero suffix tail.
+    fn crossing_cases() -> [(u64, u8); 3] {
+        [
+            (164, 3),
+            ((2u64 << (2 * 28)) | tail(28), 28),
+            ((2u64 << (2 * 29)) | tail(29), 29),
+        ]
+    }
+
+    #[test]
+    fn test_ring_round_trip() {
+        for (hash, depth) in crossing_cases() {
+            let ring = healpix::nested::get(depth).to_ring(hash);
+
+            let word = from_ring(&ring, &depth);
+            assert_eq!(word, from_nested(&hash, &depth));
+            assert_eq!(to_ring(&word), Some((ring, depth)));
+        }
     }
 
     #[test]
     fn test_zuniq_round_trip() {
-        let (hash, depth) = (164u64, 3u8);
-        let zuniq = healpix::nested::to_zuniq(depth, hash);
+        for (hash, depth) in crossing_cases() {
+            let zuniq = healpix::nested::to_zuniq(depth, hash);
 
-        let word = from_zuniq(&zuniq);
-        assert_eq!(word, from_nested(&hash, &depth));
-        assert_eq!(to_zuniq(&word), Some(zuniq));
+            let word = from_zuniq(&zuniq);
+            assert_eq!(word, from_nested(&hash, &depth));
+            assert_eq!(to_zuniq(&word), Some(zuniq));
+        }
     }
 
     #[test]

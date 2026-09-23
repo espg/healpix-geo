@@ -145,6 +145,18 @@ describe("morton grid", () => {
     expect(grid.toScheme(CELL164_L3, "morton")).to.equal(CELL164_L3);
   });
 
+  test("toScheme round-trips a level-29 id with a nonzero tail", () => {
+    // the packed suffix folds the two deepest tuples into one number, so an
+    // id whose deepest tuples are zero leaves that arithmetic untested
+    const deep = new Grid({ scheme: "nested", level: 29 });
+    const deepMorton = new Grid({ scheme: "morton", level: 29 });
+    const hash = (2n << 58n) | 0xc9b7n; // first cell of base 2, nonzero tail
+
+    const word = deep.toScheme(hash, "morton");
+    expect(healpixGeo.morton.level(word)).to.equal(29);
+    expect(deepMorton.toScheme(word, "nested")).to.equal(hash);
+  });
+
   test("toScheme accepts a level override only from level-free schemes", () => {
     expect(nested.toScheme(164n, "morton", 3)).to.equal(CELL164_L3);
     expect(() => grid.toScheme(CELL164_L3, "morton", 3)).to.throw();
