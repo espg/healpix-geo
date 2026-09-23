@@ -2,8 +2,8 @@ import * as healpixGeo from "../pkg/healpix_geo.js";
 import { Grid } from "../pkg/healpix_geo.js";
 import { describe, expect, test } from "vitest";
 
-// golden words generated with the published mortie-core 0.1.0:
-// from_nested(nested, level)
+// golden words derived from the packed-word layout documented in mortie-core
+// ([4-bit prefix][27×2-bit body][6-bit suffix]): from_nested(nested, level)
 const BASE0_L0 = 1152921504606846976n; // from_nested(0, 0)
 const CELL164_L3 = 4107282860161892355n; // from_nested(164, 3)
 const CELL41_L2 = 4107282860161892354n; // from_nested(41, 2), the parent of 164@3

@@ -119,7 +119,8 @@ mod tests {
 
     #[test]
     fn test_from_nested_golden() {
-        // words generated with the published mortie-core 0.1.0
+        // words derived from the packed-word layout documented in
+        // mortie-core ([4-bit prefix][27×2-bit body][6-bit suffix])
         assert_eq!(from_nested(&0, &0), 1152921504606846976);
         assert_eq!(from_nested(&0, &2), 1152921504606846978);
         assert_eq!(from_nested(&164, &3), 4107282860161892355);

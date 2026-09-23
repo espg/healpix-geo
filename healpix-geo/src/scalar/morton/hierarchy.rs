@@ -65,7 +65,8 @@ mod tests {
 
     #[test]
     fn test_ancestor_golden() {
-        // generated with the published mortie-core 0.1.0
+        // derived from the packed-word layout documented in mortie-core
+        // ([4-bit prefix][27×2-bit body][6-bit suffix])
         let word = from_nested(&164, &3);
         assert_eq!(ancestor(&word, &1), Some(4035225266123964417));
         assert_eq!(ancestor(&word, &2), Some(4107282860161892354));
