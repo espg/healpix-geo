@@ -506,8 +506,8 @@ impl Grid {
     /// Options:
     /// - `scheme`: `"nested"`, `"ring"`, `"zuniq"` or `"morton"` (required).
     ///   A `morton` grid takes canonical area words only; max-encoded point
-    ///   words are a codec-level concept with no area claim, and every method
-    ///   that takes a cell id rejects them.
+    ///   words have no area to draw or convert, so every method that takes a
+    ///   cell id rejects them — read them through the `morton` statics.
     /// - `level`: the refinement level, at most 29; level 0 is the 12 base
     ///   cells (required)
     /// - `ellipsoid`: a plain object as accepted by `Ellipsoid.from`, or
