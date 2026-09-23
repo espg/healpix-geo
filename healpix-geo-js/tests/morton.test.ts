@@ -153,10 +153,12 @@ describe("morton grid", () => {
 
   test("a raw unsigned sort is a preorder traversal", () => {
     // the property gridlook's hive addressing relies on: sorting mixed-level
-    // ids as unsigned integers walks the tree in preorder, so every parent
-    // lands immediately before its first child and its subtree is an unbroken
-    // run. 41@2 with all four of its children, plus two cells outside the
-    // subtree, deliberately shuffled.
+    // *area* ids as unsigned integers walks the tree in preorder, so every
+    // parent lands immediately before its first child and its subtree is an
+    // unbroken run. (Point words sort after the entire level-28/29 area
+    // region of their body, so they are not part of any subtree run.) 41@2
+    // with all four of its children, plus two cells outside the subtree,
+    // deliberately shuffled.
     const shuffled = [
       CELL167_L3,
       CELL42_L2,

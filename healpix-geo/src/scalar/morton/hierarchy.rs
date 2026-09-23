@@ -139,4 +139,38 @@ mod tests {
         let elsewhere = from_nested(&(3u64 << 4), &2);
         assert!(!contains(&base, &elsewhere));
     }
+    #[test]
+    fn test_preorder_holds_over_area_words_only() {
+        use crate::scalar::morton::conversion::from_nested_point;
+
+        // the 27/28/29 seam of base cell 2: a depth-27 cell, its first
+        // depth-28 child, a depth-28 cell that child does not contain, the
+        // first depth-29 cell under the child, and the point word of that body
+        let nested_27 = 2u64 << (2 * 27);
+        let nested_28 = 2u64 << (2 * 28);
+        let nested_29 = 2u64 << (2 * 29);
+
+        let a27 = from_nested(&nested_27, &27);
+        let a28 = from_nested(&nested_28, &28);
+        let a29 = from_nested(&nested_29, &29);
+        let other = from_nested(&(nested_28 + 3), &28);
+        let point = from_nested_point(&nested_29);
+
+        // over area words a raw unsigned sort is a preorder walk: a parent
+        // lands immediately before its first child, and its subtree is a run
+        assert_eq!(a28, a27 + 1);
+        assert_eq!(a29, a28 + 1);
+        assert!(a29 < other);
+        assert!(contains(&a27, &a29));
+        assert!(!contains(&a28, &other));
+
+        // a point word is not part of that order: its suffix sits above the
+        // whole depth-28/29 area region of its body, so it sorts after every
+        // area cell there — including cells that do not contain it
+        assert!(contains(&a28, &point));
+        assert!(other < point);
+        assert_eq!(a28, 3458764513820540956);
+        assert_eq!(other, 3458764513820540971);
+        assert_eq!(point, 3458764513820540976);
+    }
 }

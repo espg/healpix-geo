@@ -44,18 +44,20 @@ pub(crate) fn from_morton_checked(cell: u64) -> Result<(u8, u64), String> {
 /// Codec-only operations on `morton` cell ids.
 ///
 /// A `morton` id is a packed-`u64` Morton word (the `mortie-core` codec): it
-/// encodes its own refinement level, a raw unsigned sort is a Z-order
-/// traversal with parents immediately before their children, and containment
-/// testing is plain prefix truncation. None of these operations need a
-/// reference body, so they live here rather than on `Grid`; coordinate math
-/// on morton ids goes through `new Grid({ scheme: "morton", ... })`.
+/// encodes its own refinement level, a raw unsigned sort of *area* words is a
+/// Z-order traversal with parents immediately before their children, and
+/// containment testing is plain prefix truncation. None of these operations
+/// need a reference body, so they live here rather than on `Grid`; coordinate
+/// math on morton ids goes through `new Grid({ scheme: "morton", ... })`.
 ///
 /// These statics take **any** canonical word — area or max-encoded point (a
 /// coordinate cast to level 29 with no area claim). A point has a level (29),
 /// coarsens to the area cell containing it, and is contained by that cell and
 /// its ancestors; it contains nothing itself, so `contains` answers `false`
-/// for a point ancestor rather than throwing. `Grid` is the exception: it
-/// takes area words only, since a point has no area to draw or convert.
+/// for a point ancestor rather than throwing. It is outside the sort order
+/// above, though: a point sorts after the entire level-28/29 area region of
+/// its body, so it is not part of any subtree run. `Grid` is the exception:
+/// it takes area words only, since a point has no area to draw or convert.
 #[wasm_bindgen(js_name = morton)]
 pub struct Morton;
 
