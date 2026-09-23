@@ -1,5 +1,8 @@
 use cdshealpix as healpix;
 
+/// The deepest refinement level a Morton word (or a `zuniq` id) can encode.
+const MAX_DEPTH: u8 = 29;
+
 /// Pack a nested cell index at `depth` into a Morton word.
 ///
 /// # Panics
@@ -50,12 +53,26 @@ pub fn to_ring(hash: &u64) -> Option<(u64, u8)> {
 
 /// Re-encode a `zuniq` cell id as a Morton word.
 ///
-/// # Panics
-/// Panics (in `cdshealpix`) if `hash` is not a valid `zuniq` cell id.
-pub fn from_zuniq(hash: &u64) -> u64 {
-    let (depth, nested) = healpix::nested::from_zuniq(*hash);
+/// Returns `None` if `hash` is not a valid `zuniq` cell id. `cdshealpix`'s
+/// `from_zuniq` is infallible in the type system but panics for those — `0`
+/// underflows the depth computation, and an id whose sentinel bit sits at an
+/// odd position or whose cell index is out of range at the encoded depth
+/// (`u64::MAX`, for instance) blows up further down — so the id is checked
+/// here rather than passed straight through.
+pub fn from_zuniq(hash: &u64) -> Option<u64> {
+    // a well-formed zuniq id has its sentinel bit at 2·(29 − depth); note
+    // that `0` has 64 trailing zeros and is rejected by the upper bound
+    let trailing = hash.trailing_zeros();
+    if !trailing.is_multiple_of(2) || trailing > 2 * u32::from(MAX_DEPTH) {
+        return None;
+    }
 
-    mortie_core::from_nested(nested, depth)
+    let (depth, nested) = healpix::nested::from_zuniq(*hash);
+    if nested >= 12u64 << (2 * depth) {
+        return None;
+    }
+
+    Some(mortie_core::from_nested(nested, depth))
 }
 
 /// Re-encode a Morton word as a `zuniq` cell id.
@@ -171,10 +188,18 @@ mod tests {
         for (hash, depth) in crossing_cases() {
             let zuniq = healpix::nested::to_zuniq(depth, hash);
 
-            let word = from_zuniq(&zuniq);
+            let word = from_zuniq(&zuniq).unwrap();
             assert_eq!(word, from_nested(&hash, &depth));
             assert_eq!(to_zuniq(&word), Some(zuniq));
         }
+    }
+
+    #[test]
+    fn test_invalid_zuniq_ids_do_not_re_encode() {
+        // these would panic inside `cdshealpix` if passed straight through
+        assert_eq!(from_zuniq(&0), None);
+        assert_eq!(from_zuniq(&u64::MAX), None);
+        assert_eq!(from_zuniq(&2), None); // sentinel bit at an odd position
     }
 
     #[test]
