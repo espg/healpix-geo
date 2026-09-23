@@ -1,5 +1,5 @@
 import type { EllipsoidInput, GridOptions } from "../pkg/healpix_geo.js";
-import { Ellipsoid, Grid } from "../pkg/healpix_geo.js";
+import { Ellipsoid, Grid, morton } from "../pkg/healpix_geo.js";
 import { describe, expectTypeOf, test } from "vitest";
 
 // The generated `.d.ts` is the API surface TypeScript consumers actually see.
@@ -82,5 +82,16 @@ describe("generated index.d.ts", () => {
     expectTypeOf<Grid["bitCombineTable"]>().toEqualTypeOf<
       (size: number) => BigUint64Array
     >();
+  });
+
+  test("the morton statics exchange bigint ids", () => {
+    expectTypeOf(morton.level).toEqualTypeOf<(cell: bigint) => number>();
+    expectTypeOf(morton.ancestor).toEqualTypeOf<
+      (cell: bigint, level: number) => bigint
+    >();
+    expectTypeOf(morton.contains).toEqualTypeOf<
+      (ancestor: bigint, descendant: bigint) => boolean
+    >();
+    expectTypeOf(morton.isPoint).toEqualTypeOf<(cell: bigint) => boolean>();
   });
 });

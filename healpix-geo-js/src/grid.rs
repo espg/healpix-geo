@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 use crate::coordinates::Coordinate;
 use crate::ellipsoid::EllipsoidLike;
 use crate::geometry::spherical_vertex;
+use crate::morton::from_morton_checked;
 
 const MAX_LEVEL: u8 = 29;
 
@@ -50,38 +51,6 @@ fn from_zuniq_checked(cell: u64) -> Result<(u8, u64), String> {
             cell, hash, level
         ));
     }
-
-    Ok((level, hash))
-}
-
-/// Decode a `morton` cell id.
-///
-/// Only canonical *area* words are accepted: `mortie-core` zero-fills every
-/// bit below a cell's level, so each cell has exactly one bit pattern, and a
-/// word carrying junk in those bits would silently alias another id of the
-/// same cell.
-///
-/// Max-encoded point words (a coordinate cast to level 29 with no area claim)
-/// alias in exactly that way — a point and the level-29 area cell covering it
-/// are two distinct canonical words that decode to the same `(level, hash)`,
-/// so nothing downstream of this function can tell them apart and no
-/// conversion round-trip can preserve them. A point claims no area, which is
-/// also what `vertex`/`vertices` would need, so it is not a cell id: it stays
-/// a codec-level concept, constructed and inspected through the core crate
-/// (`from_nested_point`, `to_nested`, `is_canonical`).
-pub(crate) fn from_morton_checked(cell: u64) -> Result<(u8, u64), String> {
-    if !morton_scalar::conversion::is_canonical(&cell) {
-        return Err(format!("{} is not a valid morton cell id", cell));
-    }
-    if morton_scalar::conversion::is_point(&cell) {
-        return Err(format!(
-            "{} is a max-encoded point word, not a morton cell id",
-            cell
-        ));
-    }
-
-    // is_canonical implies the word decodes
-    let (hash, level) = morton_scalar::conversion::to_nested(&cell).unwrap();
 
     Ok((level, hash))
 }

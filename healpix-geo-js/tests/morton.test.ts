@@ -63,16 +63,35 @@ describe("morton statics", () => {
     ).to.throw();
   });
 
-  test("max-encoded point words are not cell ids", () => {
-    // a point word and the level-29 area cell covering it decode to the same
-    // (level, cell), so a point is not an id the statics can distinguish
-    expect(() => healpixGeo.morton.level(POINT_L29)).to.throw(
-      "not a morton cell id",
+  test("a point word coarsens to the cell containing it", () => {
+    expect(healpixGeo.morton.level(POINT_L29)).to.equal(29);
+    // below level 29 a point and its level-29 area cell share every ancestor
+    for (const level of [0, 3, 24, 28]) {
+      expect(healpixGeo.morton.ancestor(POINT_L29, level)).to.equal(
+        healpixGeo.morton.ancestor(AREA_L29, level),
+      );
+    }
+    // at its own level (and above) the point is returned unchanged
+    expect(healpixGeo.morton.ancestor(POINT_L29, 29)).to.equal(POINT_L29);
+  });
+
+  test("contains covers point words", () => {
+    expect(healpixGeo.morton.contains(AREA_L29, POINT_L29)).to.equal(true);
+    expect(healpixGeo.morton.contains(CELL164_L3, POINT_L29)).to.equal(true);
+    expect(healpixGeo.morton.contains(CELL10_L1, POINT_L29)).to.equal(true);
+    expect(healpixGeo.morton.contains(CELL165_L3, POINT_L29)).to.equal(false);
+    // a point claims no area, so it contains nothing — `false`, not a throw
+    expect(healpixGeo.morton.contains(POINT_L29, POINT_L29)).to.equal(false);
+    expect(healpixGeo.morton.contains(POINT_L29, AREA_L29)).to.equal(false);
+  });
+
+  test("isPoint separates the kinds", () => {
+    expect(healpixGeo.morton.isPoint(POINT_L29)).to.equal(true);
+    expect(healpixGeo.morton.isPoint(AREA_L29)).to.equal(false);
+    expect(healpixGeo.morton.isPoint(CELL164_L3)).to.equal(false);
+    expect(() => healpixGeo.morton.isPoint(0n)).to.throw(
+      "not a valid morton cell id",
     );
-    expect(() => healpixGeo.morton.ancestor(POINT_L29, 3)).to.throw();
-    expect(() => healpixGeo.morton.contains(AREA_L29, POINT_L29)).to.throw();
-    // the area word of the same body is unaffected
-    expect(healpixGeo.morton.level(AREA_L29)).to.equal(29);
   });
 });
 
