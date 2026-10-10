@@ -1,4 +1,8 @@
-import type { EllipsoidInput, GridOptions } from "../pkg/healpix_geo.js";
+import type {
+  Connectivity,
+  EllipsoidInput,
+  GridOptions,
+} from "../pkg/healpix_geo.js";
 import { Ellipsoid, Grid } from "../pkg/healpix_geo.js";
 import { describe, expectTypeOf, test } from "vitest";
 
@@ -80,5 +84,13 @@ describe("generated index.d.ts", () => {
     expectTypeOf<Grid["bitCombineTable"]>().toEqualTypeOf<
       (size: number) => BigUint64Array
     >();
+  });
+
+  test("Connectivity is the documented union", () => {
+    expectTypeOf<Connectivity>().toEqualTypeOf<"edge" | "vertex" | "all">();
+    expectTypeOf<Grid["neighbours"]>()
+      .parameter(1)
+      .toEqualTypeOf<Connectivity | undefined>();
+    expectTypeOf<Grid["neighbours"]>().returns.toEqualTypeOf<BigInt64Array>();
   });
 });

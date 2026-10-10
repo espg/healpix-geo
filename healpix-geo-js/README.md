@@ -73,6 +73,32 @@ const table: BigUint64Array = grid.bitCombineTable(8);
 A batch is rejected as a whole, naming the offending index
 (`cells[2]: ...`, `lonlats[2]: ...`), rather than trapping on one bad element.
 
+### neighbours
+
+Three more bulk methods look up neighbouring cells, across base cell
+boundaries like anywhere else. Each returns a flat `BigInt64Array` with a
+fixed number of ids per input cell, in the grid's scheme, with `-1n` where
+there is no cell:
+
+```typescript
+const cells = new BigUint64Array([42n, 164n]);
+
+// 8 per cell, positional: S, SW, W, NW, N, NE, E, SE
+const around: BigInt64Array = grid.neighbours(cells);
+// 4 per cell: "edge" is SW, NW, NE, SE; "vertex" is S, W, N, E
+const sharingAnEdge: BigInt64Array = grid.neighbours(cells, "edge");
+
+// (2 * ring + 1) ** 2 per cell: everything within `ring` cells, itself included
+const window: BigInt64Array = grid.kthNeighbourhood(cells, 2);
+// 8 * ring per cell: only the cells at distance `ring`
+const border: BigInt64Array = grid.kthNeighbours(cells, 2);
+```
+
+24 cells of every grid, at the corners where only three base cells meet, have
+seven neighbours. `neighbours` keeps its directional positions and marks the
+missing one; the k-ring methods are not positional and pad at the end. `ring`
+is limited to `nside`.
+
 Note that `healpixToLonLat` and `lonLatToHealpix` are only exact inverses
 within one level: on a `zuniq` grid `healpixToLonLat` reads each id at its
 embedded level while `lonLatToHealpix` encodes at the grid's level, so a

@@ -1,7 +1,9 @@
 use cdshealpix as healpix;
 use geodesy::prelude::EllipsoidBase;
+use healpix_geo::connectivity::Connectivity;
 use healpix_geo::ellipsoid::{Ellipsoid as RustEllipsoid, ReferenceBody};
 use healpix_geo::scalar::nested::coordinates as scalar;
+use healpix_geo::scalar::nested::hierarchy;
 use serde::Deserialize;
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
@@ -25,6 +27,19 @@ fn n_cells(level: u8) -> u64 {
 fn capacity(n: Option<u64>, what: &str) -> Result<usize, String> {
     n.and_then(|n| usize::try_from(n).ok())
         .ok_or_else(|| format!("{} is too large: the output array would not fit", what))
+}
+
+/// Parse the `connectivity` argument of [`Grid::neighbours`].
+fn parse_connectivity(name: Option<&str>) -> Result<Connectivity, String> {
+    match name {
+        None | Some("all") => Ok(Connectivity::All),
+        Some("edge") => Ok(Connectivity::Edge),
+        Some("vertex") => Ok(Connectivity::Vertex),
+        Some(other) => Err(format!(
+            "unknown connectivity {:?}: expected \"edge\", \"vertex\" or \"all\"",
+            other
+        )),
+    }
 }
 
 /// Decode a `zuniq` cell id.
@@ -138,6 +153,7 @@ pub(crate) struct GridOptions {
 #[wasm_bindgen(typescript_custom_section)]
 const GRID_OPTIONS: &'static str = r#"
 export type IndexingScheme = "nested" | "ring" | "zuniq";
+export type Connectivity = "edge" | "vertex" | "all";
 export type GridOptions = {
     scheme: IndexingScheme;
     level: number;
@@ -446,6 +462,133 @@ impl Grid {
         Ok(out)
     }
 
+    /// A nested hash at `level`, expressed in the grid's scheme.
+    ///
+    /// Unlike [`Grid::nested_to_scheme`] this takes the level explicitly: a
+    /// `zuniq` cell's neighbours live at the level encoded in that cell, not
+    /// at the grid's.
+    fn neighbour_to_scheme(&self, level: u8, hash: i64) -> i64 {
+        if hash < 0 {
+            return -1;
+        }
+        let hash = hash as u64;
+        (match self.scheme {
+            Scheme::Nested => hash,
+            Scheme::Ring => healpix::nested::get(level).to_ring(hash),
+            Scheme::Zuniq => healpix::nested::to_zuniq(level, hash),
+        }) as i64
+    }
+
+    /// `ring` as accepted by the k-ring lookups of a cell at `level`.
+    ///
+    /// The underlying implementation panics for a ring wider than the base
+    /// cell (`ring > nside`), which would abort the wasm module.
+    fn check_ring(ring: u32, level: u8, index: usize) -> Result<(), String> {
+        let nside = 1u32 << level;
+        if ring > nside {
+            return Err(format!(
+                "cells[{}]: `ring` must be at most `nside` ({}) at level {}, got {}",
+                index, nside, level, ring
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Apply a per-cell neighbour lookup that yields `width` ids per cell.
+    fn neighbour_table(
+        &self,
+        cells: &[u64],
+        width: Option<u64>,
+        what: &str,
+        lookup: impl Fn(usize, u8, u64) -> Result<Vec<i64>, String>,
+    ) -> Result<Vec<i64>, String> {
+        let count = capacity(
+            width.and_then(|width| width.checked_mul(cells.len() as u64)),
+            what,
+        )?;
+        let mut out = Vec::with_capacity(count);
+
+        for (index, &cell) in cells.iter().enumerate() {
+            let (level, hash) = self
+                .to_nested(cell)
+                .map_err(|message| format!("cells[{}]: {}", index, message))?;
+
+            out.extend(
+                lookup(index, level, hash)?
+                    .into_iter()
+                    .map(|neighbour| self.neighbour_to_scheme(level, neighbour)),
+            );
+        }
+
+        Ok(out)
+    }
+
+    pub(crate) fn neighbours_impl(
+        &self,
+        cells: &[u64],
+        connectivity: Option<&str>,
+    ) -> Result<Vec<i64>, String> {
+        let connectivity = parse_connectivity(connectivity)?;
+
+        self.neighbour_table(
+            cells,
+            Some(connectivity.size() as u64),
+            "`cells`",
+            |_, level, hash| {
+                Ok(hierarchy::neighbours(
+                    &hash,
+                    healpix::nested::get(level),
+                    &connectivity,
+                ))
+            },
+        )
+    }
+
+    pub(crate) fn kth_neighbours_impl(&self, cells: &[u64], ring: f64) -> Result<Vec<i64>, String> {
+        let ring = to_u32(ring, "ring")?;
+        if ring == 0 {
+            return Err("`ring` must be at least 1, got 0".to_string());
+        }
+
+        self.neighbour_table(
+            cells,
+            Some(8 * u64::from(ring)),
+            &format!("`ring` = {}", ring),
+            |index, level, hash| {
+                Self::check_ring(ring, level, index)?;
+                Ok(hierarchy::kth_neighbours(
+                    &hash,
+                    healpix::nested::get(level),
+                    &ring,
+                ))
+            },
+        )
+    }
+
+    pub(crate) fn kth_neighbourhood_impl(
+        &self,
+        cells: &[u64],
+        ring: f64,
+    ) -> Result<Vec<i64>, String> {
+        let ring = to_u32(ring, "ring")?;
+        let side = 2 * u64::from(ring) + 1;
+
+        self.neighbour_table(
+            cells,
+            side.checked_mul(side),
+            &format!("`ring` = {}", ring),
+            |index, level, hash| {
+                Self::check_ring(ring, level, index)?;
+                Ok(hierarchy::kth_neighbourhood(
+                    &hash,
+                    healpix::nested::get(level),
+                    &ring,
+                ))
+            },
+        )
+    }
+
     pub(crate) fn bit_combine_table_impl(&self, size: f64) -> Result<Vec<u64>, String> {
         let size = to_u32(size, "size")?;
         if !size.is_power_of_two() {
@@ -652,6 +795,64 @@ impl Grid {
             .map_err(|message| JsError::new(&message).into())
     }
 
+    /// Immediate neighbours of many cells, in one call
+    ///
+    /// The result is a flat `BigInt64Array` with a fixed number of ids per
+    /// input cell, in the grid's scheme and in fixed directional positions
+    /// starting at S and moving clockwise:
+    ///
+    /// - `"all"` (the default): 8 per cell — S, SW, W, NW, N, NE, E, SE
+    /// - `"edge"`: 4 per cell — SW, NW, NE, SE (cells sharing an edge)
+    /// - `"vertex"`: 4 per cell — S, W, N, E (cells sharing only a vertex)
+    ///
+    /// A direction with no neighbour is `-1n`: 24 cells of every grid (the
+    /// ones at the corners where only three base cells meet) have seven
+    /// neighbours. Neighbours across a base cell boundary are returned like
+    /// any other.
+    ///
+    /// For a `zuniq` grid each cell's neighbours are at the level encoded in
+    /// that cell.
+    #[wasm_bindgen]
+    pub fn neighbours(
+        &self,
+        cells: &[u64],
+        #[wasm_bindgen(unchecked_optional_param_type = "Connectivity")] connectivity: Option<
+            String,
+        >,
+    ) -> Result<Vec<i64>, JsValue> {
+        self.neighbours_impl(cells, connectivity.as_deref())
+            .map_err(|message| JsError::new(&message).into())
+    }
+
+    /// The cells at distance `ring` around many cells, in one call
+    ///
+    /// The result is a flat `BigInt64Array` with `8 * ring` ids per input
+    /// cell, in the grid's scheme. Unlike `neighbours` the ids are **not**
+    /// positional: where the ring is incomplete (around the corners where
+    /// only three base cells meet) the existing cells come first and the
+    /// remainder is padded with `-1n`.
+    ///
+    /// `ring` must be an integer in `[1, nside]`.
+    #[wasm_bindgen(js_name = kthNeighbours)]
+    pub fn kth_neighbours(&self, cells: &[u64], ring: f64) -> Result<Vec<i64>, JsValue> {
+        self.kth_neighbours_impl(cells, ring)
+            .map_err(|message| JsError::new(&message).into())
+    }
+
+    /// The cells within distance `ring` of many cells, in one call
+    ///
+    /// The result is a flat `BigInt64Array` with `(2 * ring + 1) ** 2` ids
+    /// per input cell (the cell itself included), in the grid's scheme. The
+    /// ids are **not** positional: where the neighbourhood is incomplete the
+    /// existing cells come first and the remainder is padded with `-1n`.
+    ///
+    /// `ring` must be an integer in `[0, nside]`.
+    #[wasm_bindgen(js_name = kthNeighbourhood)]
+    pub fn kth_neighbourhood(&self, cells: &[u64], ring: f64) -> Result<Vec<i64>, JsValue> {
+        self.kth_neighbourhood_impl(cells, ring)
+            .map_err(|message| JsError::new(&message).into())
+    }
+
     /// The full `size` × `size` z-order table, in one call
     ///
     /// Entry `row * size + col` holds `bitCombine(col, row)` — the layout
@@ -707,6 +908,99 @@ mod tests {
 
     fn grid(scheme: Scheme, level: u8) -> Grid {
         Grid::from_options(options(scheme, level)).unwrap()
+    }
+
+    #[test]
+    fn test_neighbours_match_the_core_lookup_in_every_scheme() {
+        let level = 3;
+        let layer = healpix::nested::get(level);
+        let nested: Vec<u64> = vec![0, 63, 300, 767];
+        let expected: Vec<i64> = nested
+            .iter()
+            .flat_map(|hash| hierarchy::neighbours(hash, layer, &Connectivity::All))
+            .collect();
+
+        assert_eq!(
+            grid(Scheme::Nested, level)
+                .neighbours_impl(&nested, None)
+                .unwrap(),
+            expected
+        );
+
+        let ring: Vec<u64> = nested.iter().map(|hash| layer.to_ring(*hash)).collect();
+        let to_ring = |id: &i64| {
+            if *id < 0 {
+                -1
+            } else {
+                layer.to_ring(*id as u64) as i64
+            }
+        };
+        assert_eq!(
+            grid(Scheme::Ring, level)
+                .neighbours_impl(&ring, Some("all"))
+                .unwrap(),
+            expected.iter().map(to_ring).collect::<Vec<i64>>()
+        );
+
+        // a zuniq id carries its own level: ask a level-0 grid
+        let zuniq: Vec<u64> = nested
+            .iter()
+            .map(|hash| healpix::nested::to_zuniq(level, *hash))
+            .collect();
+        let to_zuniq = |id: &i64| {
+            if *id < 0 {
+                -1
+            } else {
+                healpix::nested::to_zuniq(level, *id as u64) as i64
+            }
+        };
+        assert_eq!(
+            grid(Scheme::Zuniq, 0)
+                .neighbours_impl(&zuniq, None)
+                .unwrap(),
+            expected.iter().map(to_zuniq).collect::<Vec<i64>>()
+        );
+    }
+
+    #[test]
+    fn test_neighbour_lookups_have_a_fixed_width_and_validate() {
+        let grid = grid(Scheme::Nested, 2);
+        let cells = [0u64, 42, 191];
+
+        assert_eq!(
+            grid.neighbours_impl(&cells, Some("edge")).unwrap().len(),
+            12
+        );
+        assert_eq!(
+            grid.neighbours_impl(&cells, Some("vertex")).unwrap().len(),
+            12
+        );
+        assert_eq!(grid.kth_neighbours_impl(&cells, 2.0).unwrap().len(), 3 * 16);
+        assert_eq!(
+            grid.kth_neighbourhood_impl(&cells, 2.0).unwrap().len(),
+            3 * 25
+        );
+        assert_eq!(
+            grid.kth_neighbourhood_impl(&cells, 0.0).unwrap(),
+            [0, 42, 191]
+        );
+        // `ring` = `nside` is the widest the lookup supports
+        assert_eq!(
+            grid.kth_neighbourhood_impl(&cells, 4.0).unwrap().len(),
+            3 * 81
+        );
+        assert_eq!(grid.kth_neighbours_impl(&cells, 4.0).unwrap().len(), 3 * 32);
+
+        assert!(grid.neighbours_impl(&cells, Some("diagonal")).is_err());
+        assert!(
+            grid.neighbours_impl(&[192], None)
+                .unwrap_err()
+                .contains("cells[0]")
+        );
+        assert!(grid.kth_neighbours_impl(&cells, 0.0).is_err());
+        assert!(grid.kth_neighbours_impl(&cells, 5.0).is_err());
+        assert!(grid.kth_neighbourhood_impl(&cells, 5.0).is_err());
+        assert!(grid.kth_neighbourhood_impl(&cells, 1.5).is_err());
     }
 
     #[test]
